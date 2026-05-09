@@ -203,7 +203,7 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  const bool longPress = !fromTilt && mappedInput.getHeldTime() > skipChapterMs;
+  const bool longPress = !fromTilt && !ReaderUtils::hadRecentBlePageTurnInput() && mappedInput.getHeldTime() > skipChapterMs;
 
   // Don't skip chapter after screenshot
   if (gpio.wasReleased(HalGPIO::BTN_POWER) && gpio.wasReleased(HalGPIO::BTN_DOWN)) {
@@ -382,6 +382,10 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     case EpubReaderMenuActivity::MenuAction::GO_HOME: {
       onGoHome();
       return;
+    }
+    case EpubReaderMenuActivity::MenuAction::BLUETOOTH: {
+      activityManager.goToBluetoothSettings(true);
+      break;
     }
     case EpubReaderMenuActivity::MenuAction::DELETE_CACHE: {
       {

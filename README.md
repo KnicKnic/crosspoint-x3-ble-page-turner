@@ -1,12 +1,54 @@
-# CrossPoint Reader
+# CrossPoint Reader X3 BLE Page-Turner Fork
 
-Firmware for the **Xteink X4** e-paper display reader (unaffiliated with Xteink).
-Built using **PlatformIO** and targeting the **ESP32-C3** microcontroller.
+Community fork of [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader)
+for the **XTEink X3**, adding Bluetooth HID page-turner support and validated
+automatic reconnect for a Free3/Free3-ER-style remote.
+
+This fork is unaffiliated with XTEink and with the upstream CrossPoint Reader
+project. It keeps the normal CrossPoint EPUB reader experience, then adds an X3
+BLE remote path for people who want physical page-turn buttons.
 
 CrossPoint Reader is a purpose-built firmware designed to be a drop-in, fully open-source replacement for the official 
 Xteink firmware. It aims to match or improve upon the standard EPUB reading experience.
 
 ![](./docs/images/cover.jpg)
+
+## What Is Different In This Fork?
+
+This repo is based on upstream CrossPoint Reader commit `b8a6b58` and adds the
+validated `1.2.0-x3-ble-idlefix15` X3 BLE page-turner work.
+
+Highlights:
+
+- Bluetooth settings screen under Settings and from the reader menu.
+- NimBLE-based HID page-turner support with Free2/Free3-style profiles.
+- Bonded `Reconnect Remote` flow for the X3.
+- Automatic reconnect after reader sleep/wake.
+- Automatic reconnect after the Free3 sleeps, turns off, or is restarted.
+- Long-idle recovery that lets the X3 auto-sleep instead of being kept awake by
+  reconnect attempts.
+- Crash-loop guard for automatic reconnect, while keeping manual reconnect
+  available.
+- BLE diagnostics in `/.crosspoint/ble_diag.log` and serial `CMD:BLE_DIAG`.
+
+The final candidate was hardware validated on an XTEink X3 with a
+Free3/Free3-ER-style page turner. See
+[docs/x3-ble-page-turner.md](./docs/x3-ble-page-turner.md) for the full design,
+validation, and limitations.
+
+## Current X3 BLE Release
+
+- Version: `1.2.0-x3-ble-idlefix15`
+- Firmware SHA-256:
+  `5b23aee2453df26f35fc837ea580eedc3b7c8fa7deeb0f01092e9b7ff7b2949f`
+- Binary size: `0x5b62e0`
+- Validated hardware: XTEink X3 plus Free3/Free3-ER-style BLE page turner
+- Validation status: flash, boot, manual reconnect, page input, reader
+  sleep/wake, remote sleep/off/on, long idle recovery, repeated cycles, and
+  reconnect guard behavior all passed
+
+The firmware binary is intended to be published as a GitHub release asset named
+`crosspoint-x3-ble-idlefix15.bin`.
 
 ## Motivation
 
@@ -41,6 +83,8 @@ This project is **not affiliated with Xteink**; it's built as a community projec
   - [ ] User provided fonts
   - [ ] Full UTF support
 - [x] Screen rotation
+- [x] X3 Bluetooth HID page-turner support in this fork
+- [x] Free3-style remote reconnect after sleep/wake, remote off/on, and long idle
 
 Multi-language support: Read EPUBs in various languages, including English, Spanish, French, German, Italian, Portuguese, Russian, Ukrainian, Polish, Swedish, Norwegian, [and more](./USER_GUIDE.md#supported-languages).
 
@@ -50,6 +94,31 @@ See [the user guide](./USER_GUIDE.md) for instructions on operating CrossPoint, 
 For more details about the scope of the project, see the [SCOPE.md](SCOPE.md) document.
 
 ## Installing
+
+### X3 BLE fork release
+
+1. Download `crosspoint-x3-ble-idlefix15.bin` from this repository's
+   [releases page](https://github.com/hannah-nula/crosspoint-x3-ble-page-turner/releases).
+2. Connect the XTEink X3 over USB and put it into the ESP32-C3 flash/download
+   mode if needed.
+3. Flash both OTA app slots using the helper:
+
+```sh
+X3_BLE_FIRMWARE_BIN=~/Downloads/crosspoint-x3-ble-idlefix15.bin \
+  scripts/flash_record_x3_ble_idlefix15.sh
+```
+
+The helper verifies both app slots after writing. If macOS cannot see the X3
+flash port, run:
+
+```sh
+python3 scripts/diagnose_x3_usb_visibility.py
+```
+
+After flashing, enable Bluetooth from Settings, connect/reconnect the remote,
+and use the reader normally. The intended daily-driver path is bonded reconnect
+and automatic reconnect; `Scan for devices` is intentionally disabled in this
+X3 candidate because it was unstable during testing.
 
 ### Web (latest firmware)
 
@@ -104,7 +173,7 @@ See [Development](#development) below.
 CrossPoint uses PlatformIO for building and flashing the firmware. To get started, clone the repository:
 
 ```
-git clone --recursive https://github.com/crosspoint-reader/crosspoint-reader
+git clone --recursive https://github.com/hannah-nula/crosspoint-x3-ble-page-turner
 
 # Or, if you've already cloned without --recursive:
 git submodule update --init --recursive
@@ -195,3 +264,8 @@ CrossPoint Reader is **not affiliated with Xteink or any manufacturer of the X4 
 
 Huge shoutout to [**diy-esp32-epub-reader** by atomic14](https://github.com/atomic14/diy-esp32-epub-reader), which was a project I took a lot of inspiration from as I
 was making CrossPoint.
+
+This fork also owes its foundation to the upstream
+[CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader)
+project. The X3 BLE page-turner changes are community fork work layered on top
+of that codebase.

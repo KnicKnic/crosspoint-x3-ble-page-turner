@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include <BluetoothDiagnostics.h>
+#include <BluetoothHIDManager.h>
 #include <Epub.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
@@ -13,6 +15,9 @@
 #include <Logging.h>
 #include <SPI.h>
 #include <builtinFonts/all.h>
+#include <esp_system.h>
+#include <soc/rtc_cntl_reg.h>
+#include <soc/soc.h>
 
 #include <cstring>
 
@@ -34,6 +39,15 @@ GfxRenderer renderer(display);
 ActivityManager activityManager(renderer, mappedInputManager);
 FontDecompressor fontDecompressor;
 FontCacheManager fontCacheManager(renderer.getFontMap());
+static volatile bool gBluetoothReaderContext = false;
+
+static void rebootToDownloadMode() {
+  logSerial.println("BOOTLOADER_REBOOTING");
+  logSerial.flush();
+  delay(50);
+  REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
+  esp_restart();
+}
 
 // Fonts
 EpdFont notoserif14RegularFont(&notoserif_14_regular);
@@ -182,8 +196,27 @@ void waitForPowerRelease() {
 // Enter deep sleep mode
 void enterDeepSleep() {
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
+  auto& btMgr = BluetoothHIDManager::getInstance();
+  if (btMgr.isEnabled() && btMgr.isBondedReconnectInProgress()) {
+    LOG_INF("SLP", "Deep sleep deferred: BLE reconnect in progress");
+    BluetoothDiagnostics::record("sleep_deferred_reconnect");
+    BluetoothDiagnostics::flushToStorage();
+    return;
+  }
+
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
   APP_STATE.saveToFile();
+
+  if (btMgr.isEnabled()) {
+    LOG_INF("SLP", "Disabling Bluetooth before deep sleep");
+    if (!btMgr.disable()) {
+      LOG_INF("SLP", "Deep sleep deferred: Bluetooth disable failed: %s", btMgr.lastError.c_str());
+      BluetoothDiagnostics::recordf("sleep_deferred_ble_disable", "msg=%s", btMgr.lastError.c_str());
+      BluetoothDiagnostics::flushToStorage();
+      return;
+    }
+    btMgr.armAutoReconnectOnNextWake();
+  }
 
   activityManager.goToSleep();
 
@@ -257,6 +290,8 @@ void setup() {
   }
 
   HalSystem::checkPanic();
+  BluetoothDiagnostics::recordBoot();
+  BluetoothDiagnostics::flushToStorage(true);
 
   SETTINGS.loadFromFile();
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
@@ -264,6 +299,13 @@ void setup() {
   OPDS_STORE.loadFromFile();
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
+
+  auto& btMgr = BluetoothHIDManager::getInstance();
+  btMgr.setButtonInjector([](uint8_t buttonIndex, bool pressed) { gpio.setVirtualButtonState(buttonIndex, pressed); });
+  btMgr.setButtonActivityNotifier([](uint8_t buttonIndex) { gpio.updateVirtualButtonActivity(buttonIndex); });
+  btMgr.setReaderContextCallback([]() { return gBluetoothReaderContext; });
+  btMgr.setBondedDevice(SETTINGS.bleBondedDeviceAddr, SETTINGS.bleBondedDeviceName, SETTINGS.bleBondedDeviceAddrType);
+  LOG_INF("MAIN", "Bluetooth HID initialized with button injection");
 
   const auto wakeupReason = gpio.getWakeupReason();
   switch (wakeupReason) {
@@ -274,6 +316,14 @@ void setup() {
       break;
     case HalGPIO::WakeupReason::AfterUSBPower:
       // If USB power caused a cold boot, go back to sleep
+      if (gpio.deviceIsX3()) {
+        // X3 wake/power-on can look like USB power when the fuel gauge reports
+        // charging. Boot normally so a real button wake does not vanish back
+        // into sleep before the UI and USB CDC return.
+        BluetoothDiagnostics::record("x3_after_usb_power_boot_allowed");
+        BluetoothDiagnostics::flushToStorage();
+        break;
+      }
       LOG_DBG("MAIN", "Wakeup reason: After USB Power");
       powerManager.startDeepSleep(gpio);
       break;
@@ -288,6 +338,15 @@ void setup() {
   LOG_DBG("MAIN", "Starting CrossPoint version " CROSSPOINT_VERSION);
 
   setupDisplayAndFonts();
+
+  if (SETTINGS.bluetoothEnabled) {
+    LOG_INF("MAIN", "Restoring Bluetooth from saved settings");
+    if (!btMgr.enable()) {
+      LOG_ERR("MAIN", "Failed to restore Bluetooth: %s", btMgr.lastError.c_str());
+      SETTINGS.bluetoothEnabled = 0;
+      SETTINGS.saveToFile();
+    }
+  }
 
   activityManager.goToBoot();
 
@@ -322,6 +381,20 @@ void loop() {
 
   gpio.update();
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
+  const bool userInputDetected = gpio.wasAnyPressed() || gpio.wasAnyReleased() || halTiltSensor.hadActivity();
+  bool bleRecentActivity = false;
+  bool bleActiveWork = false;
+
+  gBluetoothReaderContext = activityManager.isReaderActivity();
+  auto& btMgr = BluetoothHIDManager::getInstance();
+  btMgr.updateActivity();
+  if (btMgr.isEnabled()) {
+    bleActiveWork = btMgr.isBondedReconnectInProgress();
+    btMgr.processInputEvents();
+    btMgr.checkAutoReconnect(userInputDetected);
+    bleActiveWork = bleActiveWork || btMgr.isBondedReconnectInProgress();
+    bleRecentActivity = btMgr.hasRecentActivity();
+  }
 
   renderer.setFadingFix(SETTINGS.fadingFix);
 
@@ -344,14 +417,24 @@ void loop() {
         uint8_t* buf = display.getFrameBuffer();
         logSerial.write(buf, bufferSize);
         logSerial.printf("SCREENSHOT_END\n");
+      } else if (cmd == "BLE_DIAG") {
+        const std::string diag = BluetoothDiagnostics::persistedSnapshot();
+        logSerial.printf("BLE_DIAG_START\n");
+        logSerial.print(diag.c_str());
+        logSerial.printf("BLE_DIAG_END\n");
+      } else if (cmd == "REBOOT_BOOTLOADER") {
+        rebootToDownloadMode();
       }
     }
   }
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
-  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || halTiltSensor.hadActivity() ||
-      activityManager.preventAutoSleep()) {
+  if (bleActiveWork) {
+    powerManager.setPowerSaving(false);
+  }
+
+  if (userInputDetected || activityManager.preventAutoSleep() || bleRecentActivity) {
     lastActivityTime = millis();         // Reset inactivity timer
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
   }
@@ -372,6 +455,11 @@ void loop() {
 
   const unsigned long sleepTimeoutMs = SETTINGS.getSleepTimeoutMs();
   if (millis() - lastActivityTime >= sleepTimeoutMs) {
+    if (bleActiveWork) {
+      LOG_DBG("SLP", "Auto-sleep deferred: BLE reconnect active");
+      delay(50);
+      return;
+    }
     LOG_DBG("SLP", "Auto-sleep triggered after %lu ms of inactivity", sleepTimeoutMs);
     enterDeepSleep();
     // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
@@ -417,8 +505,8 @@ void loop() {
   // Add delay at the end of the loop to prevent tight spinning
   // When an activity requests skip loop delay (e.g., webserver running), use yield() for faster response
   // Otherwise, use longer delay to save power
-  if (activityManager.skipLoopDelay()) {
-    powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
+  if (activityManager.skipLoopDelay() || bleActiveWork) {
+    powerManager.setPowerSaving(false);  // Keep active work at full performance.
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
   } else {
     if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS) {

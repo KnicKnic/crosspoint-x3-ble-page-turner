@@ -1,5 +1,6 @@
 #pragma once
 
+#include <BluetoothHIDManager.h>
 #include <CrossPointSettings.h>
 #include <GfxRenderer.h>
 #include <HalTiltSensor.h>
@@ -36,8 +37,10 @@ struct PageTurnResult {
   bool fromTilt;
 };
 
+inline bool hadRecentBlePageTurnInput() { return BluetoothHIDManager::getInstance().hadRecentFree2Input(); }
+
 inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
-  const bool usePress = SETTINGS.longPressButtonBehavior == SETTINGS.OFF;
+  const bool usePress = hadRecentBlePageTurnInput() || SETTINGS.longPressButtonBehavior == SETTINGS.OFF;
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
   const bool prev = tiltPrev || (usePress ? (input.wasPressed(MappedInputManager::Button::PageBack) ||

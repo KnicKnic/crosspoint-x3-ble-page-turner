@@ -3,6 +3,7 @@
 #include <string>
 
 #include "Arduino.h"
+#include "BluetoothDiagnostics.h"
 #include "HalStorage.h"
 #include "Logging.h"
 #include "esp_debug_helpers.h"
@@ -90,6 +91,10 @@ void begin() {
 void checkPanic() {
   if (isRebootFromPanic()) {
     auto panicInfo = getPanicInfo(true);
+    const auto bleInfo = BluetoothDiagnostics::persistedSnapshot();
+    if (!bleInfo.empty()) {
+      panicInfo += "\n\nBluetooth diagnostics:\n" + bleInfo;
+    }
     auto file = Storage.open("/crash_report.txt", O_WRITE | O_CREAT | O_TRUNC);
     if (file) {
       file.write(panicInfo.c_str(), panicInfo.size());

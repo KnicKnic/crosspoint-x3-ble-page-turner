@@ -3,6 +3,7 @@
 #include <GfxRenderer.h>
 #include <Logging.h>
 
+#include "BluetoothSettingsActivity.h"
 #include "ButtonRemapActivity.h"
 #include "ClearCacheActivity.h"
 #include "CrossPointSettings.h"
@@ -13,6 +14,7 @@
 #include "OtaUpdateActivity.h"
 #include "SettingsList.h"
 #include "StatusBarSettingsActivity.h"
+#include "activities/ActivityManager.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -31,6 +33,10 @@ void SettingsActivity::onEnter() {
 
   for (const auto& setting : getSettingsList()) {
     if (setting.category == StrId::STR_NONE_OPT) continue;
+    if (setting.category == StrId::STR_CAT_SYSTEM && setting.type == SettingType::TOGGLE &&
+        setting.nameId == StrId::STR_BLUETOOTH) {
+      continue;
+    }
     if (setting.category == StrId::STR_CAT_DISPLAY) {
       displaySettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_READER) {
@@ -47,6 +53,7 @@ void SettingsActivity::onEnter() {
   controlsSettings.insert(controlsSettings.begin(),
                           SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_BLUETOOTH, SettingAction::Bluetooth));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
@@ -191,6 +198,11 @@ void SettingsActivity::toggleCurrentSetting() {
         break;
       case SettingAction::Language:
         startActivityForResult(std::make_unique<LanguageSelectActivity>(renderer, mappedInput), resultHandler);
+        break;
+      case SettingAction::Bluetooth:
+        startActivityForResult(
+            std::make_unique<BluetoothSettingsActivity>(renderer, mappedInput, [] { activityManager.popActivity(); }),
+            resultHandler);
         break;
       case SettingAction::None:
         // Do nothing
