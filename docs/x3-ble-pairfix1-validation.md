@@ -7,6 +7,9 @@
 - Base reconnect build: `1.2.0-x3-ble-idlefix15`
 - Purpose: restore safe first-time pairing for new remotes while preserving the
   validated idlefix15 reconnect behavior.
+- Current hardware status: flashed and smoke-tested on the maintainer X3 with
+  the existing saved Free3 setup on 2026-05-17. First-time pairing with
+  additional unpaired remotes still needs community confirmation.
 
 ## Issue
 
@@ -75,10 +78,10 @@ hardware checklist for anyone validating pairfix1 on device:
 | Gate | Steps | Expected Result | Status |
 | --- | --- | --- | --- |
 | Flash | Run `scripts/flash_record_x3_ble_pairfix1.sh` | Both app slots write and explicit `verify-flash` checks pass | Passed 2026-05-17: app0 and app1 write plus explicit `verify-flash` succeeded |
-| Boot | Start the X3 after flashing pairfix1 | CrossPoint UI appears and stays responsive for at least 2 minutes | Pending |
-| Existing reconnect | With an already saved Free3, use `Reconnect Remote` if needed | Reconnect succeeds without freeze/reboot | Pending |
+| Boot | Start the X3 after flashing pairfix1 | CrossPoint UI appears and stays responsive for at least 2 minutes | Passed 2026-05-17: maintainer smoke test after flashing reported working |
+| Existing reconnect | With an already saved Free3, use `Reconnect Remote` if needed | Reconnect succeeds without freeze/reboot | Passed 2026-05-17: existing saved Free3 setup reported working after flash |
 | Pair new remote | Settings -> Bluetooth -> `Pair New Remote` while Free2/Free3 is awake/pairing | Remote pairs, menu reports `Paired ...`, and the bond is saved | Pending |
-| Page input | Open an EPUB and press both remote directions | Forward and back page turns work | Pending |
+| Page input | Open an EPUB and press both remote directions | Forward and back page turns work | Passed 2026-05-17: existing saved Free3 setup reported working after flash |
 | Sleep/wake reconnect | Sleep the reader, wake it, then press the remote | Page turning recovers without opening Bluetooth settings | Pending |
 | Remote sleep/off/on reconnect | Let the remote sleep or restart it | Page turning recovers without opening Bluetooth settings | Pending |
 | Ambiguous scan safety | If multiple HID remotes are nearby, run `Pair New Remote` | Pairing fails safe with an ambiguity message, not a random bond or crash | Optional |

@@ -5,7 +5,9 @@ Release: `1.2.0-x3-ble-pairfix1`
 This is a community CrossPoint Reader fork build for the XTEink X3 with
 Bluetooth HID page-turner support. It was validated with a Free3/Free3-ER-style
 remote on the idlefix15 reconnect baseline, then updated with a first-pairing
-fix for new Free2/Free3-style remotes.
+fix for new Free2/Free3-style remotes. Pairfix1 has been flashed and
+smoke-tested on the maintainer's X3 with the existing Free3 setup; first-time
+pairing on additional unpaired remotes should be confirmed by community testers.
 
 ## Upstream Base
 
@@ -79,16 +81,22 @@ Idlefix15 passed on actual XTEink X3 hardware:
 - 3 reader sleep/wake cycles and 3 Free3 sleep/off/on cycles with no crash;
 - reconnect guard source audit and post-validation manual reconnect availability.
 
-Pairfix1 software validation:
+Pairfix1 validation:
 
+- flashed to both X3 OTA app slots with explicit `verify-flash`;
+- boot/current-device smoke test reported working on the maintainer X3;
 - release build compiles;
 - pairing flow audit passes;
 - reconnect invariant audits still pass;
-- first-time pairing is reachable from the settings UI.
+- first-time pairing is reachable from the settings UI;
+- first-time pairing with additional unpaired Free2/Free3-style remotes is the
+  main community confirmation target for this release.
 
 ## Known Limits
 
 - Tested with one XTEink X3 and one Free3/Free3-ER-style page turner.
+- Pairfix1 has been smoke-tested with the existing saved Free3 setup. New
+  first-time pairing reports from other Free2/Free3-style remotes are welcome.
 - The old open-ended `Scan for devices` list is still not the supported daily
   setup path. Use `Pair New Remote` for first pairing and `Reconnect Remote`
   afterwards.

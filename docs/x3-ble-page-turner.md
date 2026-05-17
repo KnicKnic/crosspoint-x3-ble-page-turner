@@ -2,7 +2,9 @@
 
 This fork adds Bluetooth HID page-turner support to CrossPoint Reader for the
 XTEink X3. It was built and hardware-validated with a Free3/Free3-ER-style BLE
-page turner after a sequence of reconnect and long-idle fixes.
+page turner after a sequence of reconnect and long-idle fixes. The pairfix1
+release was also flashed and smoke-tested on the maintainer X3 with the
+existing saved Free3 setup.
 
 The fork is based on upstream `crosspoint-reader/crosspoint-reader` at commit
 [`b8a6b58b5ee21a2b5b9a53f7ed5366fc858d137c`](https://github.com/crosspoint-reader/crosspoint-reader/commit/b8a6b58b5ee21a2b5b9a53f7ed5366fc858d137c)
@@ -136,12 +138,18 @@ Validation gates:
 | Guard source audit and no guarded reconnect crash during validation | Passed |
 
 See `docs/x3-ble-idlefix15-hardware-validation.md` for the full checklist.
-Pairfix1 adds a software-validated first-pairing fix on top of that reconnect
-baseline; see `docs/x3-ble-pairfix1-validation.md`.
+Pairfix1 adds a first-pairing fix on top of that reconnect baseline. It has
+passed local pairing/reconnect audits, was flashed to both X3 app slots, and
+was smoke-tested with the existing saved Free3 setup. First-time pairing with
+additional unpaired remotes is the community confirmation target; see
+`docs/x3-ble-pairfix1-validation.md`.
 
 ## Known Limits
 
 - This has been hardware-tested on one X3 plus one Free3/Free3-ER-style remote.
+- Pairfix1 has been smoke-tested on the existing saved Free3 setup; new
+  first-time pairing reports from unpaired Free2/Free3-style remotes are still
+  useful.
 - The old `Scan for devices` list is still not the daily-driver path. Use
   `Pair New Remote` for first setup and `Reconnect Remote` for an already saved
   remote.

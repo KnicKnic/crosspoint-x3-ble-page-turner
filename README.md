@@ -50,8 +50,9 @@ Highlights:
   available.
 - BLE diagnostics in `/.crosspoint/ble_diag.log` and serial `CMD:BLE_DIAG`.
 
-The final candidate was hardware validated on an XTEink X3 with a
-Free3/Free3-ER-style page turner. See
+The reconnect baseline was hardware validated on an XTEink X3 with a
+Free3/Free3-ER-style page turner, and `pairfix1` has been flashed and
+smoke-tested on the same X3. See
 [docs/x3-ble-page-turner.md](./docs/x3-ble-page-turner.md) for the full design,
 validation, and limitations.
 
@@ -65,8 +66,11 @@ validation, and limitations.
 - Validation status: idlefix15 hardware validation passed flash, boot, manual
   reconnect, page input, reader sleep/wake, remote sleep/off/on, long idle
   recovery, repeated cycles, and reconnect guard behavior. Pairfix1 preserves
-  that reconnect path and restores first-time pairing through a bounded worker
-  scan; see [docs/x3-ble-pairfix1-validation.md](./docs/x3-ble-pairfix1-validation.md).
+  that reconnect path, was flashed successfully to both X3 app slots, and was
+  smoke-tested on the existing Free3 setup. The restored `Pair New Remote`
+  first-time setup path is implemented with a bounded worker scan and is ready
+  for community confirmation with unpaired Free2/Free3-style remotes; see
+  [docs/x3-ble-pairfix1-validation.md](./docs/x3-ble-pairfix1-validation.md).
 
 The firmware binary is intended to be published as a GitHub release asset named
 `crosspoint-x3-ble-pairfix1.bin`.
