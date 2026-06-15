@@ -140,6 +140,15 @@ flash port, run:
 python3 scripts/diagnose_x3_usb_visibility.py
 ```
 
+On Windows, build and flash the current local firmware image with:
+
+```powershell
+.\scripts\flash_x3_windows.ps1 -Build
+```
+
+The Windows helper writes and verifies both OTA app slots. Pass `-Port COM3` if
+more than one candidate ESP32-C3 serial port is connected.
+
 After flashing, enable Bluetooth from Settings, choose `Pair New Remote` for a
 new Free2/Free3-style remote, or use `Reconnect Remote` for an already saved
 remote. The intended daily-driver path remains bonded reconnect and automatic
