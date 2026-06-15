@@ -17,7 +17,7 @@ This project has two code areas:
 ## Target Environment
 
 - Host: Windows laptop.
-- Host app stack: .NET WPF tray app.
+- Host app stack: .NET 10 WPF tray app.
 - Teams target: the current Microsoft Teams desktop client installed on the
   laptop.
 - Transport: BLE only for both control/status and notes.
@@ -95,6 +95,14 @@ Suggested characteristics:
 - Device info read: firmware version, protocol version, battery/state summary.
 - Notes transfer write/notify: reserved for milestone 2 chunked payloads.
 
+Initial UUID assignments:
+
+- Service: `7d2d5f00-778d-4df6-a6d5-7c4e7a000001`
+- Host status: `7d2d5f00-778d-4df6-a6d5-7c4e7a000002`
+- Device command: `7d2d5f00-778d-4df6-a6d5-7c4e7a000003`
+- Device info: `7d2d5f00-778d-4df6-a6d5-7c4e7a000004`
+- Notes transfer: `7d2d5f00-778d-4df6-a6d5-7c4e7a000005`
+
 Initial message types:
 
 - `host_status`: mute state, camera state, Teams detected, timestamp/sequence.
@@ -156,7 +164,7 @@ Rendering target:
 
 1. Define custom BLE service IDs, message schema, sequence/ack behavior, and
    reconnect rules.
-2. Scaffold `laptop_host/` as a .NET WPF tray app.
+2. Scaffold `laptop_host/` as a .NET 10 WPF tray app.
 3. Build a minimal host/X3 BLE handshake with connection state shown on the X3.
 4. Add X3 Teams companion activity, Home UI entry point, and `Confirm` button
    command.

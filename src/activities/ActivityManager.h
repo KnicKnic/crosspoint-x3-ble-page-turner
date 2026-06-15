@@ -79,6 +79,7 @@ class ActivityManager {
 
   // goTo... functions are convenient wrapper for replaceActivity()
   void goToFileTransfer();
+  void goToLaptopCompanion();
   void goToSettings();
   void goToBluetoothSettings(bool exitOnSuccessfulConnect = false);
   void goToFileBrowser(std::string path = {});
@@ -99,6 +100,7 @@ class ActivityManager {
   void popActivity();
 
   bool preventAutoSleep() const;
+  bool suppressAutoDeepSleep() const;
   bool isReaderActivity() const;
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;

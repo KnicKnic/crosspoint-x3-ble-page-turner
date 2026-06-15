@@ -460,10 +460,14 @@ void loop() {
       delay(50);
       return;
     }
-    LOG_DBG("SLP", "Auto-sleep triggered after %lu ms of inactivity", sleepTimeoutMs);
-    enterDeepSleep();
-    // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
-    return;
+    if (activityManager.suppressAutoDeepSleep()) {
+      LOG_DBG("SLP", "Auto-sleep suppressed by active activity");
+    } else {
+      LOG_DBG("SLP", "Auto-sleep triggered after %lu ms of inactivity", sleepTimeoutMs);
+      enterDeepSleep();
+      // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
+      return;
+    }
   }
 
   if (gpio.isPressed(HalGPIO::BTN_POWER) && gpio.getHeldTime() > SETTINGS.getPowerButtonDuration()) {

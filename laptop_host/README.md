@@ -1,0 +1,27 @@
+# X3 Laptop Companion Host
+
+.NET 10 WPF tray app for the X3 BLE Laptop Companion.
+
+## Requirements
+
+- Windows 10 19041 or newer.
+- .NET 10 SDK.
+- Bluetooth LE adapter.
+
+## Current Status
+
+- Scans for the X3 companion GATT service.
+- Subscribes to device-command notifications.
+- Sends best-effort Teams presence status to the X3.
+- Handles `ToggleMute` by focusing Teams when possible and sending `Ctrl+Shift+M`.
+- Includes a test mode that stops BLE scanning and lets you simulate an X3 mute
+  button press from the host UI.
+
+Microphone and camera state detection are still placeholders and currently report
+`Unknown`.
+
+## Build
+
+```powershell
+dotnet build .\X3LaptopCompanion.csproj
+```

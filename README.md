@@ -204,6 +204,26 @@ git clone --recursive https://github.com/hannah-nula/crosspoint-x3-ble-page-turn
 git submodule update --init --recursive
 ```
 
+### Building firmware
+
+Build the release firmware image with PlatformIO:
+
+```sh
+pio run -e gh_release
+```
+
+The output image is written to `.pio/build/gh_release/firmware.bin`.
+
+On Windows, if PlatformIO is running under Python 3.13 and the build fails while
+printing translated language names, force UTF-8 before running PlatformIO:
+
+```powershell
+$env:PYTHONUTF8='1'
+$env:PYTHONIOENCODING='utf-8'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+pio run -e gh_release -j 4
+```
+
 ### Flashing your device
 
 Connect your Xteink X4 to your computer via USB-C and run the following command.
