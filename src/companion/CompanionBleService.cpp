@@ -4,6 +4,7 @@
 #include <BluetoothHIDManager.h>
 #include <Logging.h>
 #include <NimBLEDevice.h>
+#include <NimBLEUtils.h>
 
 #include <algorithm>
 #include <cstring>
@@ -17,15 +18,22 @@ CompanionBleService* g_service = nullptr;
 class CompanionServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override {
     (void)pServer;
-    (void)connInfo;
+    LOG_INF("COMP", "Host connected address=%s handle=%u", connInfo.getAddress().toString().c_str(),
+            static_cast<unsigned>(connInfo.getConnHandle()));
+    BluetoothDiagnostics::recordf("companion_host_gap_connected", "addr=%s handle=%u",
+                                  connInfo.getAddress().toString().c_str(),
+                                  static_cast<unsigned>(connInfo.getConnHandle()));
     if (g_service) {
       g_service->onHostConnected();
     }
   }
 
   void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override {
-    (void)connInfo;
-    (void)reason;
+    LOG_INF("COMP", "Host disconnected address=%s handle=%u reason=%d %s", connInfo.getAddress().toString().c_str(),
+            static_cast<unsigned>(connInfo.getConnHandle()), reason, NimBLEUtils::returnCodeToString(reason));
+    BluetoothDiagnostics::recordf("companion_host_gap_disconnected", "addr=%s handle=%u reason=%d",
+                                  connInfo.getAddress().toString().c_str(),
+                                  static_cast<unsigned>(connInfo.getConnHandle()), reason);
     if (g_service) {
       g_service->onHostDisconnected();
     }
