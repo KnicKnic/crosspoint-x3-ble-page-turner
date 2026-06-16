@@ -22,6 +22,7 @@ namespace X3LaptopCompanion
         private GattCharacteristic deviceCommandCharacteristic;
         private ushort hostStatusSequence;
         private int connecting;
+        private bool intentionallyPausedAdvertisementWatcher;
         private bool disposed;
 
         public event EventHandler<CompanionConnectionStatus> StatusChanged;
@@ -78,6 +79,7 @@ namespace X3LaptopCompanion
             {
                 advertisementWatcher.Received -= OnAdvertisementReceived;
                 advertisementWatcher.Stopped -= OnAdvertisementWatcherStopped;
+                intentionallyPausedAdvertisementWatcher = false;
                 if (advertisementWatcher.Status == BluetoothLEAdvertisementWatcherStatus.Started)
                 {
                     advertisementWatcher.Stop();
@@ -233,6 +235,11 @@ namespace X3LaptopCompanion
         private void OnAdvertisementWatcherStopped(BluetoothLEAdvertisementWatcher sender, BluetoothLEAdvertisementWatcherStoppedEventArgs args)
         {
             HostLog.Write("BLE advertisement watcher stopped. Status=" + sender.Status + " Error=" + args.Error);
+            if (intentionallyPausedAdvertisementWatcher)
+            {
+                return;
+            }
+
             if (!disposed)
             {
                 PublishStatus(false, "BLE advertisement watcher stopped: " + args.Error);
@@ -263,6 +270,7 @@ namespace X3LaptopCompanion
 
             if (advertisementWatcher?.Status == BluetoothLEAdvertisementWatcherStatus.Started)
             {
+                intentionallyPausedAdvertisementWatcher = true;
                 advertisementWatcher.Stop();
                 HostLog.Write("BLE advertisement watcher paused for GATT connection attempt.");
             }
@@ -279,9 +287,10 @@ namespace X3LaptopCompanion
 
             HostLog.Write("BLE device opened. Name=" + device.Name + " Address=" +
                 FormatBluetoothAddress(device.BluetoothAddress) + " AddressType=" + device.BluetoothAddressType +
-                " ConnectionStatus=" + device.ConnectionStatus);
+                " ConnectionStatus=" + device.ConnectionStatus + " CanPair=" + device.DeviceInformation.Pairing.CanPair +
+                " IsPaired=" + device.DeviceInformation.Pairing.IsPaired);
 
-            var services = await device.GetGattServicesForUuidAsync(CompanionProtocol.ServiceUuid, BluetoothCacheMode.Uncached);
+            var services = await GetGattServicesWithPairingFallbackAsync(device);
             HostLog.Write("Advertisement GATT service lookup status=" + services.Status + " count=" + services.Services.Count);
             if (services.Status != GattCommunicationStatus.Success || services.Services.Count == 0)
             {
@@ -294,6 +303,28 @@ namespace X3LaptopCompanion
             companionDevice?.Dispose();
             companionDevice = device;
             await UseGattServiceAsync(services.Services[0]);
+        }
+
+        private static async Task<GattDeviceServicesResult> GetGattServicesWithPairingFallbackAsync(BluetoothLEDevice device)
+        {
+            var services = await device.GetGattServicesForUuidAsync(CompanionProtocol.ServiceUuid, BluetoothCacheMode.Uncached);
+            if (services.Status == GattCommunicationStatus.Success && services.Services.Count > 0)
+            {
+                return services;
+            }
+
+            HostLog.Write("Initial GATT service lookup failed. Status=" + services.Status + " count=" +
+                services.Services.Count + " CanPair=" + device.DeviceInformation.Pairing.CanPair + " IsPaired=" +
+                device.DeviceInformation.Pairing.IsPaired);
+
+            if (!device.DeviceInformation.Pairing.IsPaired && device.DeviceInformation.Pairing.CanPair)
+            {
+                var pairResult = await device.DeviceInformation.Pairing.PairAsync(DevicePairingProtectionLevel.None);
+                HostLog.Write("PairAsync(None) result status=" + pairResult.Status + " protection=" +
+                    pairResult.ProtectionLevelUsed);
+            }
+
+            return await device.GetGattServicesForUuidAsync(CompanionProtocol.ServiceUuid, BluetoothCacheMode.Uncached);
         }
 
         private async Task UseGattServiceAsync(GattDeviceService service)
@@ -366,6 +397,7 @@ namespace X3LaptopCompanion
             if (!disposed && !IsConnected() && advertisementWatcher != null &&
                 advertisementWatcher.Status != BluetoothLEAdvertisementWatcherStatus.Started)
             {
+                intentionallyPausedAdvertisementWatcher = false;
                 advertisementWatcher.Start();
                 HostLog.Write("BLE advertisement watcher restarted after unsuccessful GATT connection attempt. Status=" +
                     advertisementWatcher.Status);
