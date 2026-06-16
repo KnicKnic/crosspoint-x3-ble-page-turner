@@ -307,7 +307,14 @@ namespace X3LaptopCompanion
 
         private static async Task<GattDeviceServicesResult> GetGattServicesWithPairingFallbackAsync(BluetoothLEDevice device)
         {
-            var services = await device.GetGattServicesForUuidAsync(CompanionProtocol.ServiceUuid, BluetoothCacheMode.Uncached);
+            if (!device.DeviceInformation.Pairing.IsPaired && device.DeviceInformation.Pairing.CanPair)
+            {
+                var pairResult = await device.DeviceInformation.Pairing.PairAsync(DevicePairingProtectionLevel.None);
+                HostLog.Write("PairAsync(None) before GATT lookup result status=" + pairResult.Status + " protection=" +
+                    pairResult.ProtectionLevelUsed);
+            }
+
+            var services = await GetGattServicesForUuidLoggedAsync(device, BluetoothCacheMode.Uncached, "initial");
             if (services.Status == GattCommunicationStatus.Success && services.Services.Count > 0)
             {
                 return services;
@@ -320,11 +327,27 @@ namespace X3LaptopCompanion
             if (!device.DeviceInformation.Pairing.IsPaired && device.DeviceInformation.Pairing.CanPair)
             {
                 var pairResult = await device.DeviceInformation.Pairing.PairAsync(DevicePairingProtectionLevel.None);
-                HostLog.Write("PairAsync(None) result status=" + pairResult.Status + " protection=" +
+                HostLog.Write("PairAsync(None) retry result status=" + pairResult.Status + " protection=" +
                     pairResult.ProtectionLevelUsed);
             }
 
-            return await device.GetGattServicesForUuidAsync(CompanionProtocol.ServiceUuid, BluetoothCacheMode.Uncached);
+            return await GetGattServicesForUuidLoggedAsync(device, BluetoothCacheMode.Uncached, "retry");
+        }
+
+        private static async Task<GattDeviceServicesResult> GetGattServicesForUuidLoggedAsync(BluetoothLEDevice device,
+            BluetoothCacheMode cacheMode, string attemptName)
+        {
+            try
+            {
+                return await device.GetGattServicesForUuidAsync(CompanionProtocol.ServiceUuid, cacheMode);
+            }
+            catch (COMException ex)
+            {
+                HostLog.Write("GATT service lookup " + attemptName + " threw COM exception. HResult=0x" +
+                    ex.HResult.ToString("X8") + " cacheMode=" + cacheMode + " connectionStatus=" +
+                    device.ConnectionStatus + " isPaired=" + device.DeviceInformation.Pairing.IsPaired, ex);
+                throw;
+            }
         }
 
         private async Task UseGattServiceAsync(GattDeviceService service)
