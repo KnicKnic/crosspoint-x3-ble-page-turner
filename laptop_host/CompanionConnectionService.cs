@@ -294,7 +294,7 @@ namespace X3LaptopCompanion
                 " IsPaired=" + device.DeviceInformation.Pairing.IsPaired);
 
             var session = await CreateMaintainedGattSessionAsync(device);
-            var services = await GetGattServicesWithPairingFallbackAsync(device);
+            var services = await GetGattServicesWithRetryAsync(device);
             HostLog.Write("Advertisement GATT service lookup status=" + services.Status + " count=" + services.Services.Count);
             if (services.Status != GattCommunicationStatus.Success || services.Services.Count == 0)
             {
@@ -333,33 +333,46 @@ namespace X3LaptopCompanion
             return session;
         }
 
-        private static async Task<GattDeviceServicesResult> GetGattServicesWithPairingFallbackAsync(BluetoothLEDevice device)
+        private static async Task<GattDeviceServicesResult> GetGattServicesWithRetryAsync(BluetoothLEDevice device)
         {
-            if (!device.DeviceInformation.Pairing.IsPaired && device.DeviceInformation.Pairing.CanPair)
+            GattDeviceServicesResult lastResult = null;
+            COMException lastComException = null;
+            for (var attempt = 1; attempt <= 5; attempt++)
             {
-                var pairResult = await device.DeviceInformation.Pairing.PairAsync(DevicePairingProtectionLevel.None);
-                HostLog.Write("PairAsync(None) before GATT lookup result status=" + pairResult.Status + " protection=" +
-                    pairResult.ProtectionLevelUsed);
+                try
+                {
+                    var cacheMode = attempt == 1 ? BluetoothCacheMode.Uncached : BluetoothCacheMode.Cached;
+                    var services = await GetGattServicesForUuidLoggedAsync(device, cacheMode, "attempt " + attempt);
+                    lastResult = services;
+                    lastComException = null;
+                    if (services.Status == GattCommunicationStatus.Success && services.Services.Count > 0)
+                    {
+                        return services;
+                    }
+
+                    HostLog.Write("GATT service lookup attempt " + attempt + " returned status=" + services.Status +
+                        " count=" + services.Services.Count + " connectionStatus=" + device.ConnectionStatus +
+                        " sessionMayStillBeSettling=True");
+                }
+                catch (COMException ex)
+                {
+                    lastComException = ex;
+                }
+
+                await Task.Delay(500);
             }
 
-            var services = await GetGattServicesForUuidLoggedAsync(device, BluetoothCacheMode.Uncached, "initial");
-            if (services.Status == GattCommunicationStatus.Success && services.Services.Count > 0)
+            if (lastResult != null)
             {
-                return services;
+                return lastResult;
             }
 
-            HostLog.Write("Initial GATT service lookup failed. Status=" + services.Status + " count=" +
-                services.Services.Count + " CanPair=" + device.DeviceInformation.Pairing.CanPair + " IsPaired=" +
-                device.DeviceInformation.Pairing.IsPaired);
-
-            if (!device.DeviceInformation.Pairing.IsPaired && device.DeviceInformation.Pairing.CanPair)
+            if (lastComException != null)
             {
-                var pairResult = await device.DeviceInformation.Pairing.PairAsync(DevicePairingProtectionLevel.None);
-                HostLog.Write("PairAsync(None) retry result status=" + pairResult.Status + " protection=" +
-                    pairResult.ProtectionLevelUsed);
+                throw lastComException;
             }
 
-            return await GetGattServicesForUuidLoggedAsync(device, BluetoothCacheMode.Uncached, "retry");
+            throw new InvalidOperationException("GATT service lookup did not produce a result.");
         }
 
         private static async Task<GattDeviceServicesResult> GetGattServicesForUuidLoggedAsync(BluetoothLEDevice device,
