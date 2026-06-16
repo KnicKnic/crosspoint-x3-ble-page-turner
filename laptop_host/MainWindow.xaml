@@ -7,9 +7,9 @@
         mc:Ignorable="d"
         Title="X3 Laptop Companion"
         Height="420"
-        Width="520"
+        Width="620"
         MinHeight="380"
-        MinWidth="460"
+        MinWidth="560"
         WindowStartupLocation="CenterScreen">
     <Grid Margin="24">
         <Grid.RowDefinitions>
@@ -84,6 +84,10 @@
                     Width="90"
                     Margin="0,0,8,0"
                     Click="SendTestStatus_Click" />
+            <Button Content="Open Log"
+                    Width="90"
+                    Margin="0,0,8,0"
+                    Click="OpenLog_Click" />
             <Button Content="Toggle Mute"
                     Width="110"
                     Margin="0,0,8,0"

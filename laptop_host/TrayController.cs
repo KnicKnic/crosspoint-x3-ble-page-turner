@@ -45,6 +45,7 @@ namespace X3LaptopCompanion
             var menu = new Forms.ContextMenuStrip();
             menu.Items.Add("Show Status", null, (sender, args) => ShowStatus());
             menu.Items.Add("Toggle Teams Mute", null, (sender, args) => mainWindow.ToggleMuteFromUi());
+            menu.Items.Add("Open Log", null, (sender, args) => mainWindow.OpenLog());
             menu.Items.Add(new Forms.ToolStripSeparator());
             menu.Items.Add("Exit", null, (sender, args) => Application.Current.Shutdown());
             return menu;

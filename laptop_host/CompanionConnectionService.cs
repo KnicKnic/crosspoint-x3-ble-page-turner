@@ -29,11 +29,14 @@ namespace X3LaptopCompanion
             }
 
             var selector = GattDeviceService.GetDeviceSelectorFromUuid(CompanionProtocol.ServiceUuid);
+            HostLog.Write("BLE watcher starting. Selector=" + selector);
             watcher = DeviceInformation.CreateWatcher(selector);
             watcher.Added += OnDeviceAdded;
             watcher.Removed += OnDeviceRemoved;
+            watcher.EnumerationCompleted += OnWatcherEnumerationCompleted;
             watcher.Stopped += OnWatcherStopped;
             watcher.Start();
+            HostLog.Write("BLE watcher started. Status=" + watcher.Status);
             PublishStatus(false, "Scanning for X3 companion service.");
         }
 
@@ -43,6 +46,7 @@ namespace X3LaptopCompanion
             {
                 watcher.Added -= OnDeviceAdded;
                 watcher.Removed -= OnDeviceRemoved;
+                watcher.EnumerationCompleted -= OnWatcherEnumerationCompleted;
                 watcher.Stopped -= OnWatcherStopped;
                 if (watcher.Status == DeviceWatcherStatus.Started ||
                     watcher.Status == DeviceWatcherStatus.EnumerationCompleted)
@@ -62,6 +66,7 @@ namespace X3LaptopCompanion
             hostStatusCharacteristic = null;
             companionService?.Dispose();
             companionService = null;
+            HostLog.Write("BLE watcher/service stopped.");
             PublishStatus(false, "BLE scanning stopped.");
         }
 
@@ -75,13 +80,18 @@ namespace X3LaptopCompanion
         {
             if (hostStatusCharacteristic == null)
             {
+                HostLog.Write("Host status skipped; host status characteristic is not available.");
                 return;
             }
 
-            var writer = new DataWriter();
+            var writer = new DataWriter
+            {
+                ByteOrder = ByteOrder.LittleEndian
+            };
             writer.WriteByte(CompanionProtocol.ProtocolVersion);
             writer.WriteByte((byte)CompanionMessageType.HostStatus);
-            writer.WriteUInt16(hostStatusSequence++);
+            var sequence = hostStatusSequence++;
+            writer.WriteUInt16(sequence);
             writer.WriteByte(teamsDetected ? (byte)1 : (byte)0);
             writer.WriteByte((byte)microphone);
             writer.WriteByte((byte)camera);
@@ -90,19 +100,32 @@ namespace X3LaptopCompanion
                 writer.WriteString(message.Length > 48 ? message.Substring(0, 48) : message);
             }
 
-            await hostStatusCharacteristic.WriteValueAsync(writer.DetachBuffer(), GattWriteOption.WriteWithoutResponse);
+            var status = await hostStatusCharacteristic.WriteValueAsync(writer.DetachBuffer(), GattWriteOption.WriteWithoutResponse);
+            HostLog.Write("Host status write seq=" + sequence + " status=" + status + " teams=" + teamsDetected +
+                " mic=" + microphone + " camera=" + camera + " message=" + message);
+            if (status != GattCommunicationStatus.Success)
+            {
+                PublishStatus(false, "Host status write failed: " + status);
+            }
         }
 
         private async void OnDeviceAdded(DeviceWatcher sender, DeviceInformation args)
         {
+            HostLog.Write("BLE device added. Name=" + args.Name + " IsPaired=" + args.Pairing.IsPaired + " Id=" + args.Id);
             if (disposed || Interlocked.Exchange(ref connecting, 1) == 1)
             {
+                HostLog.Write("BLE device add ignored. disposed=" + disposed + " connecting=" + connecting);
                 return;
             }
 
             try
             {
                 await ConnectAsync(args);
+            }
+            catch (Exception ex)
+            {
+                HostLog.Write("BLE connect failed with exception.", ex);
+                PublishStatus(false, "BLE connect exception: " + ex.Message);
             }
             finally
             {
@@ -112,11 +135,19 @@ namespace X3LaptopCompanion
 
         private void OnDeviceRemoved(DeviceWatcher sender, DeviceInformationUpdate args)
         {
+            HostLog.Write("BLE device removed. Id=" + args.Id);
             PublishStatus(false, "X3 companion disconnected.");
+        }
+
+        private void OnWatcherEnumerationCompleted(DeviceWatcher sender, object args)
+        {
+            HostLog.Write("BLE watcher enumeration completed. Status=" + sender.Status);
+            PublishStatus(false, "BLE scan enumeration completed; still watching for X3.");
         }
 
         private void OnWatcherStopped(DeviceWatcher sender, object args)
         {
+            HostLog.Write("BLE watcher stopped. Status=" + sender.Status);
             if (!disposed)
             {
                 PublishStatus(false, "BLE watcher stopped.");
@@ -126,22 +157,27 @@ namespace X3LaptopCompanion
         private async Task ConnectAsync(DeviceInformation deviceInfo)
         {
             PublishStatus(false, "Found X3 companion service. Connecting...");
+            HostLog.Write("Opening GATT service. Name=" + deviceInfo.Name + " Id=" + deviceInfo.Id);
 
             var service = await GattDeviceService.FromIdAsync(deviceInfo.Id);
             if (service == null)
             {
+                HostLog.Write("GattDeviceService.FromIdAsync returned null.");
                 PublishStatus(false, "Unable to open X3 companion service.");
                 return;
             }
 
             companionService?.Dispose();
             companionService = service;
+            HostLog.Write("GATT service opened. Uuid=" + service.Uuid);
 
-            hostStatusCharacteristic = await GetCharacteristicAsync(service, CompanionProtocol.HostStatusUuid);
-            deviceCommandCharacteristic = await GetCharacteristicAsync(service, CompanionProtocol.DeviceCommandUuid);
+            hostStatusCharacteristic = await GetCharacteristicAsync(service, CompanionProtocol.HostStatusUuid, "host status");
+            deviceCommandCharacteristic = await GetCharacteristicAsync(service, CompanionProtocol.DeviceCommandUuid, "device command");
 
             if (hostStatusCharacteristic == null || deviceCommandCharacteristic == null)
             {
+                HostLog.Write("Required characteristic missing. hostStatus=" + (hostStatusCharacteristic != null) +
+                    " deviceCommand=" + (deviceCommandCharacteristic != null));
                 PublishStatus(false, "X3 companion service is missing required characteristics.");
                 return;
             }
@@ -149,6 +185,7 @@ namespace X3LaptopCompanion
             deviceCommandCharacteristic.ValueChanged += OnDeviceCommandValueChanged;
             var status = await deviceCommandCharacteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
                 GattClientCharacteristicConfigurationDescriptorValue.Notify);
+            HostLog.Write("Device command notification subscribe status=" + status);
             if (status != GattCommunicationStatus.Success)
             {
                 PublishStatus(false, "Could not subscribe to X3 command notifications.");
@@ -158,9 +195,11 @@ namespace X3LaptopCompanion
             PublishStatus(true, "Connected to X3 companion.");
         }
 
-        private static async Task<GattCharacteristic> GetCharacteristicAsync(GattDeviceService service, Guid uuid)
+        private static async Task<GattCharacteristic> GetCharacteristicAsync(GattDeviceService service, Guid uuid, string name)
         {
             var result = await service.GetCharacteristicsForUuidAsync(uuid, BluetoothCacheMode.Uncached);
+            HostLog.Write("Characteristic lookup " + name + " uuid=" + uuid + " status=" + result.Status +
+                " count=" + result.Characteristics.Count);
             if (result.Status != GattCommunicationStatus.Success || result.Characteristics.Count == 0)
             {
                 return null;
@@ -172,27 +211,33 @@ namespace X3LaptopCompanion
         private void OnDeviceCommandValueChanged(GattCharacteristic sender, GattValueChangedEventArgs args)
         {
             var reader = DataReader.FromBuffer(args.CharacteristicValue);
+            reader.ByteOrder = ByteOrder.LittleEndian;
             if (reader.UnconsumedBufferLength < 5)
             {
+                HostLog.Write("Device command notification ignored; payload too short.");
                 return;
             }
 
             var version = reader.ReadByte();
             var messageType = reader.ReadByte();
-            reader.ReadUInt16();
+            var sequence = reader.ReadUInt16();
             var command = reader.ReadByte();
 
             if (version != CompanionProtocol.ProtocolVersion ||
                 messageType != (byte)CompanionMessageType.DeviceCommand)
             {
+                HostLog.Write("Device command notification ignored. version=" + version +
+                    " messageType=" + messageType + " command=" + command);
                 return;
             }
 
+            HostLog.Write("Device command received. seq=" + sequence + " command=" + command);
             DeviceCommandReceived?.Invoke(this, (CompanionDeviceCommand)command);
         }
 
         private void PublishStatus(bool connected, string message)
         {
+            HostLog.Write("Status changed. connected=" + connected + " message=" + message);
             StatusChanged?.Invoke(this, new CompanionConnectionStatus(connected, message));
         }
     }

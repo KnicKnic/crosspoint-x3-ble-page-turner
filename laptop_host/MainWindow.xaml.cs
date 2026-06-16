@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Threading;
 
@@ -23,6 +24,7 @@ namespace X3LaptopCompanion
         {
             InitializeComponent();
             DataContext = this;
+            HostLog.Write("Main window created.");
             connectionService.StatusChanged += OnConnectionStatusChanged;
             connectionService.DeviceCommandReceived += OnDeviceCommandReceived;
             statusTimer.Interval = System.TimeSpan.FromSeconds(2);
@@ -83,15 +85,18 @@ namespace X3LaptopCompanion
 
         public void ToggleMuteFromUi()
         {
+            HostLog.Write("Toggle mute requested.");
             RefreshTeamsPresence();
             if (!teamsController.TryToggleMute())
             {
+                HostLog.Write("Toggle mute failed; Teams not found.");
                 DetailText = "Teams was not found. Start or join a Teams meeting, then try again.";
                 _ = connectionService.SendHostStatusAsync(false, CompanionTriState.Unknown, CompanionTriState.Unknown, "Teams not found");
                 return;
             }
 
             MicrophoneText = "Toggle sent";
+            HostLog.Write("Toggle mute sent to Teams.");
             DetailText =
                 "Mute toggle sent with Ctrl+Shift+M. State detection will become authoritative once Teams status detection is implemented.";
             _ = connectionService.SendHostStatusAsync(true, CompanionTriState.Unknown, CompanionTriState.Unknown, "Mute toggle sent");
@@ -99,6 +104,7 @@ namespace X3LaptopCompanion
 
         public void SimulateX3MutePress()
         {
+            HostLog.Write("Simulate X3 mute press requested.");
             if (!IsTestMode)
             {
                 DetailText = "Enable test mode before simulating X3 commands.";
@@ -110,6 +116,7 @@ namespace X3LaptopCompanion
 
         public void SendTestStatus()
         {
+            HostLog.Write("Test status requested.");
             RefreshTeamsPresence();
             MicrophoneText = "Muted";
             CameraText = "Off";
@@ -118,6 +125,7 @@ namespace X3LaptopCompanion
 
         private void OnLoaded(object sender, RoutedEventArgs e)
         {
+            HostLog.Write("Main window loaded. TestMode=" + IsTestMode);
             RefreshTeamsPresence();
             if (!IsTestMode)
             {
@@ -128,6 +136,7 @@ namespace X3LaptopCompanion
 
         private void OnClosing(object sender, CancelEventArgs e)
         {
+            HostLog.Write("Main window close requested; hiding to tray.");
             e.Cancel = true;
             Hide();
         }
@@ -147,9 +156,26 @@ namespace X3LaptopCompanion
             SendTestStatus();
         }
 
+        private void OpenLog_Click(object sender, RoutedEventArgs e)
+        {
+            OpenLog();
+        }
+
         private void Hide_Click(object sender, RoutedEventArgs e)
         {
             Hide();
+        }
+
+        public void OpenLog()
+        {
+            HostLog.Write("Open log requested.");
+            var logPath = HostLog.LogPath;
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = "/select,\"" + logPath + "\"",
+                UseShellExecute = true
+            });
         }
 
         private void RefreshTeamsPresence()
@@ -175,6 +201,7 @@ namespace X3LaptopCompanion
         {
             Dispatcher.Invoke(() =>
             {
+                HostLog.Write("UI status received. connected=" + status.IsConnected + " message=" + status.Message);
                 ConnectionText = status.IsConnected ? "Connected" : "Disconnected";
                 DetailText = status.Message;
                 if (status.IsConnected)
@@ -187,6 +214,7 @@ namespace X3LaptopCompanion
 
         private void OnDeviceCommandReceived(object sender, CompanionDeviceCommand command)
         {
+            HostLog.Write("UI device command received. command=" + command);
             if (command != CompanionDeviceCommand.ToggleMute)
             {
                 return;
@@ -197,6 +225,7 @@ namespace X3LaptopCompanion
 
         private void ApplyTestMode()
         {
+            HostLog.Write("Apply test mode. enabled=" + IsTestMode);
             if (IsTestMode)
             {
                 connectionService.Stop();
