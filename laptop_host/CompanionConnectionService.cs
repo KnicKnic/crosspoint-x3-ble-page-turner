@@ -17,6 +17,7 @@ namespace X3LaptopCompanion
         private BluetoothLEAdvertisementWatcher advertisementWatcher;
         private readonly Dictionary<ulong, DateTimeOffset> advertisementLogTimes = new Dictionary<ulong, DateTimeOffset>();
         private BluetoothLEDevice companionDevice;
+        private GattSession gattSession;
         private GattDeviceService companionService;
         private GattCharacteristic hostStatusCharacteristic;
         private GattCharacteristic deviceCommandCharacteristic;
@@ -97,6 +98,8 @@ namespace X3LaptopCompanion
             hostStatusCharacteristic = null;
             companionService?.Dispose();
             companionService = null;
+            gattSession?.Dispose();
+            gattSession = null;
             companionDevice?.Dispose();
             companionDevice = null;
             HostLog.Write("BLE watcher/service stopped.");
@@ -290,19 +293,44 @@ namespace X3LaptopCompanion
                 " ConnectionStatus=" + device.ConnectionStatus + " CanPair=" + device.DeviceInformation.Pairing.CanPair +
                 " IsPaired=" + device.DeviceInformation.Pairing.IsPaired);
 
+            var session = await CreateMaintainedGattSessionAsync(device);
             var services = await GetGattServicesWithPairingFallbackAsync(device);
             HostLog.Write("Advertisement GATT service lookup status=" + services.Status + " count=" + services.Services.Count);
             if (services.Status != GattCommunicationStatus.Success || services.Services.Count == 0)
             {
+                session?.Dispose();
                 device.Dispose();
                 PublishStatus(false, "X3 advertisement found, but GATT service could not be opened: " + services.Status);
                 RestartAdvertisementWatcherIfNeeded();
                 return;
             }
 
+            gattSession?.Dispose();
+            gattSession = session;
             companionDevice?.Dispose();
             companionDevice = device;
             await UseGattServiceAsync(services.Services[0]);
+        }
+
+        private static async Task<GattSession> CreateMaintainedGattSessionAsync(BluetoothLEDevice device)
+        {
+            var session = await GattSession.FromDeviceIdAsync(device.BluetoothDeviceId);
+            if (session == null)
+            {
+                HostLog.Write("GattSession.FromDeviceIdAsync returned null.");
+                return null;
+            }
+
+            HostLog.Write("GattSession opened. Status=" + session.SessionStatus + " CanMaintainConnection=" +
+                session.CanMaintainConnection + " MaxPduSize=" + session.MaxPduSize);
+            if (session.CanMaintainConnection)
+            {
+                session.MaintainConnection = true;
+                HostLog.Write("GattSession MaintainConnection enabled. Status=" + session.SessionStatus);
+                await Task.Delay(250);
+            }
+
+            return session;
         }
 
         private static async Task<GattDeviceServicesResult> GetGattServicesWithPairingFallbackAsync(BluetoothLEDevice device)
