@@ -113,15 +113,42 @@ bool CompanionBleService::begin() {
     }
 
     hostStatusCharacteristic->setCallbacks(&hostStatusCallbacks);
-    service->start();
+    if (!server->start()) {
+      LOG_ERR("COMP", "Failed to start companion GATT server");
+      BluetoothDiagnostics::record("companion_gatt_start_failed");
+      if (ownsBluetoothStack) {
+        btMgr.disable();
+      }
+      ownsBluetoothStack = false;
+      server = nullptr;
+      hostStatusCharacteristic = nullptr;
+      deviceCommandCharacteristic = nullptr;
+      deviceInfoCharacteristic = nullptr;
+      return false;
+    }
+    BluetoothDiagnostics::record("companion_gatt_started");
   }
 
   publishDeviceInfo();
 
   auto* advertising = NimBLEDevice::getAdvertising();
   advertising->clearData();
+  advertising->enableScanResponse(true);
   advertising->addServiceUUID(CompanionProtocol::SERVICE_UUID);
-  advertising->start();
+  advertising->setName("X3 Companion");
+  if (!advertising->start()) {
+    LOG_ERR("COMP", "Failed to start companion advertising");
+    BluetoothDiagnostics::record("companion_advertising_start_failed");
+    if (ownsBluetoothStack) {
+      BluetoothHIDManager::getInstance().disable();
+      server = nullptr;
+      hostStatusCharacteristic = nullptr;
+      deviceCommandCharacteristic = nullptr;
+      deviceInfoCharacteristic = nullptr;
+    }
+    ownsBluetoothStack = false;
+    return false;
+  }
   LOG_INF("COMP", "Advertising companion service %s", CompanionProtocol::SERVICE_UUID);
 
   running = true;
