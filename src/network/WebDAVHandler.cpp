@@ -226,14 +226,11 @@ void WebDAVHandler::handlePropfind(WebServer& s) {
       file.getName(name, sizeof(name));
       String fileName(name);
 
-      // Skip hidden/protected items
-      bool shouldHide = fileName.startsWith(".");
-      if (!shouldHide) {
-        for (const auto* item : HIDDEN_ITEMS) {
-          if (fileName.equals(item)) {
-            shouldHide = true;
-            break;
-          }
+      bool shouldHide = false;
+      for (const auto* item : HIDDEN_ITEMS) {
+        if (fileName.equals(item)) {
+          shouldHide = true;
+          break;
         }
       }
 
@@ -770,8 +767,6 @@ bool WebDAVHandler::isProtectedPath(const String& path) const {
     if (end == -1) end = path.length();
 
     String segment = path.substring(start, end);
-
-    if (segment.startsWith(".")) return true;
 
     for (const auto* item : HIDDEN_ITEMS) {
       if (segment.equals(item)) return true;

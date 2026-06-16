@@ -20,8 +20,7 @@
 #include "html/js/jszip_minJs.generated.h"
 
 namespace {
-// Folders/files to hide from the web interface file browser
-// Note: Items starting with "." are automatically hidden
+// Folders/files to hide from the web interface file browser.
 constexpr const char* HIDDEN_ITEMS[] = {"System Volume Information", "XTCache"};
 constexpr uint16_t UDP_PORTS[] = {54982, 48123, 39001, 44044, 59678};
 constexpr uint16_t LOCAL_UDP_PORT = 8134;
@@ -71,9 +70,6 @@ String normalizeWebPath(const String& inputPath) {
 }
 
 bool isProtectedItemName(const String& name) {
-  if (name.startsWith(".")) {
-    return true;
-  }
   for (const auto* item : HIDDEN_ITEMS) {
     if (name.equals(item)) {
       return true;
@@ -383,16 +379,13 @@ void CrossPointWebServer::scanFiles(const char* path, const std::function<void(F
     file.getName(name, sizeof(name));
     auto fileName = String(name);
 
-    // Skip hidden items (starting with ".")
-    bool shouldHide = !SETTINGS.showHiddenFiles && fileName.startsWith(".");
+    bool shouldHide = false;
 
     // Check against explicitly hidden items list
-    if (!shouldHide) {
-      for (const auto* item : HIDDEN_ITEMS) {
-        if (fileName.equals(item)) {
-          shouldHide = true;
-          break;
-        }
+    for (const auto* item : HIDDEN_ITEMS) {
+      if (fileName.equals(item)) {
+        shouldHide = true;
+        break;
       }
     }
 
@@ -492,10 +485,6 @@ void CrossPointWebServer::handleDownload() const {
   }
 
   const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
-  if (itemName.startsWith(".")) {
-    server->send(403, "text/plain", "Cannot access system files");
-    return;
-  }
   for (const auto* item : HIDDEN_ITEMS) {
     if (itemName.equals(item)) {
       server->send(403, "text/plain", "Cannot access protected items");
@@ -1022,13 +1011,6 @@ void CrossPointWebServer::handleDelete() const {
 
     // Security check: prevent deletion of protected items
     const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
-
-    // Hidden/system files are protected
-    if (itemName.startsWith(".")) {
-      failedItems += itemPath + " (hidden/system file); ";
-      allSuccess = false;
-      continue;
-    }
 
     // Check against explicitly protected items
     bool isProtected = false;
