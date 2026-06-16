@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Windows.Devices.Bluetooth;
@@ -210,7 +211,13 @@ namespace X3LaptopCompanion
 
             try
             {
-                await ConnectFromAdvertisementAsync(args.BluetoothAddress);
+                await ConnectFromAdvertisementAsync(args.BluetoothAddress, args.BluetoothAddressType);
+            }
+            catch (COMException ex)
+            {
+                HostLog.Write("BLE advertisement connect failed with COM exception. HResult=0x" +
+                    ex.HResult.ToString("X8"), ex);
+                PublishStatus(false, "BLE GATT connect failed: 0x" + ex.HResult.ToString("X8"));
             }
             catch (Exception ex)
             {
@@ -248,22 +255,31 @@ namespace X3LaptopCompanion
             await UseGattServiceAsync(service);
         }
 
-        private async Task ConnectFromAdvertisementAsync(ulong bluetoothAddress)
+        private async Task ConnectFromAdvertisementAsync(ulong bluetoothAddress, BluetoothAddressType addressType)
         {
             PublishStatus(false, "Found X3 companion advertisement. Connecting...");
-            HostLog.Write("Opening BLE device from advertisement. Address=" + FormatBluetoothAddress(bluetoothAddress));
+            HostLog.Write("Opening BLE device from advertisement. Address=" + FormatBluetoothAddress(bluetoothAddress) +
+                " AddressType=" + addressType);
 
-            var device = await BluetoothLEDevice.FromBluetoothAddressAsync(bluetoothAddress);
+            if (advertisementWatcher?.Status == BluetoothLEAdvertisementWatcherStatus.Started)
+            {
+                advertisementWatcher.Stop();
+                HostLog.Write("BLE advertisement watcher paused for GATT connection attempt.");
+            }
+
+            var device = await BluetoothLEDevice.FromBluetoothAddressAsync(bluetoothAddress, addressType);
             if (device == null)
             {
                 HostLog.Write("BluetoothLEDevice.FromBluetoothAddressAsync returned null for " +
-                    FormatBluetoothAddress(bluetoothAddress));
+                    FormatBluetoothAddress(bluetoothAddress) + " AddressType=" + addressType);
                 PublishStatus(false, "Unable to open X3 BLE device from advertisement.");
+                RestartAdvertisementWatcherIfNeeded();
                 return;
             }
 
             HostLog.Write("BLE device opened. Name=" + device.Name + " Address=" +
-                FormatBluetoothAddress(device.BluetoothAddress) + " ConnectionStatus=" + device.ConnectionStatus);
+                FormatBluetoothAddress(device.BluetoothAddress) + " AddressType=" + device.BluetoothAddressType +
+                " ConnectionStatus=" + device.ConnectionStatus);
 
             var services = await device.GetGattServicesForUuidAsync(CompanionProtocol.ServiceUuid, BluetoothCacheMode.Uncached);
             HostLog.Write("Advertisement GATT service lookup status=" + services.Status + " count=" + services.Services.Count);
@@ -271,6 +287,7 @@ namespace X3LaptopCompanion
             {
                 device.Dispose();
                 PublishStatus(false, "X3 advertisement found, but GATT service could not be opened: " + services.Status);
+                RestartAdvertisementWatcherIfNeeded();
                 return;
             }
 
@@ -340,8 +357,19 @@ namespace X3LaptopCompanion
             advertisementLogTimes[args.BluetoothAddress] = now;
             HostLog.Write("BLE advertisement received. Address=" + FormatBluetoothAddress(args.BluetoothAddress) +
                 " Name=" + args.Advertisement.LocalName + " RSSI=" + args.RawSignalStrengthInDBm +
-                " Type=" + args.AdvertisementType + " ServiceUuids=" +
+                " AddressType=" + args.BluetoothAddressType + " Type=" + args.AdvertisementType + " ServiceUuids=" +
                 string.Join(",", args.Advertisement.ServiceUuids));
+        }
+
+        private void RestartAdvertisementWatcherIfNeeded()
+        {
+            if (!disposed && !IsConnected() && advertisementWatcher != null &&
+                advertisementWatcher.Status != BluetoothLEAdvertisementWatcherStatus.Started)
+            {
+                advertisementWatcher.Start();
+                HostLog.Write("BLE advertisement watcher restarted after unsuccessful GATT connection attempt. Status=" +
+                    advertisementWatcher.Status);
+            }
         }
 
         private static string FormatBluetoothAddress(ulong address)
