@@ -45,6 +45,7 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <TextBlock Text="X3 connection" FontWeight="SemiBold" />
@@ -61,12 +62,18 @@
 
                 <TextBlock Grid.Row="4" Text="Test mode" Margin="0,8,0,0" FontWeight="SemiBold" />
                 <TextBlock Grid.Row="4" Grid.Column="1" Margin="0,8,0,0" Text="{Binding TestModeText}" />
+
+                <TextBlock Grid.Row="5" Text="Teams mode" Margin="0,8,0,0" FontWeight="SemiBold" />
+                <TextBlock Grid.Row="5" Grid.Column="1" Margin="0,8,0,0" Text="{Binding TeamsModeText}" />
             </Grid>
         </Border>
 
         <StackPanel Grid.Row="2">
             <CheckBox Content="Test mode"
                       IsChecked="{Binding IsTestMode, Mode=TwoWay}"
+                      Margin="0,0,0,8" />
+            <CheckBox Content="Teams dry run"
+                      IsChecked="{Binding IsTeamsDryRun, Mode=TwoWay}"
                       Margin="0,0,0,10" />
             <TextBlock Text="{Binding DetailText}"
                        TextWrapping="Wrap"

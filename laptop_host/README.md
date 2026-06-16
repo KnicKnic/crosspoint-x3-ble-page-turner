@@ -16,6 +16,8 @@
 - Handles `ToggleMute` by focusing Teams when possible and sending `Ctrl+Shift+M`.
 - Includes a test mode that stops BLE scanning and lets you simulate an X3 mute
   button press from the host UI.
+- Includes a Teams dry-run mode that keeps BLE active and acknowledges X3 mute
+  commands without focusing or controlling Teams.
 - Writes a diagnostic log to `%LOCALAPPDATA%\X3LaptopCompanion\host.log`.
   Use the `Open Log` button or tray menu item to jump to it.
 

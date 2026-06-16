@@ -17,6 +17,8 @@ namespace X3LaptopCompanion
         private string cameraText = "Unknown";
         private bool isTestMode;
         private string testModeText = "Off";
+        private bool isTeamsDryRun;
+        private string teamsModeText = "Live Teams";
         private string detailText =
             "Open Laptop Companion on the X3 Home screen, then pair/connect over BLE once the firmware service is wired in.";
 
@@ -77,6 +79,24 @@ namespace X3LaptopCompanion
             private set { SetField(ref testModeText, value, nameof(TestModeText)); }
         }
 
+        public bool IsTeamsDryRun
+        {
+            get { return isTeamsDryRun; }
+            set
+            {
+                if (SetField(ref isTeamsDryRun, value, nameof(IsTeamsDryRun)))
+                {
+                    ApplyTeamsDryRun();
+                }
+            }
+        }
+
+        public string TeamsModeText
+        {
+            get { return teamsModeText; }
+            private set { SetField(ref teamsModeText, value, nameof(TeamsModeText)); }
+        }
+
         public string DetailText
         {
             get { return detailText; }
@@ -87,6 +107,18 @@ namespace X3LaptopCompanion
         {
             HostLog.Write("Toggle mute requested.");
             RefreshTeamsPresence();
+            if (IsTeamsDryRun)
+            {
+                TeamsText = "Dry run";
+                MicrophoneText = "Toggle received";
+                CameraText = "Unchanged";
+                HostLog.Write("Toggle mute dry-run completed; Teams was not touched.");
+                DetailText = "Dry run: X3 mute command received over BLE. Teams was not focused or controlled.";
+                _ = connectionService.SendHostStatusAsync(true, CompanionTriState.Off, CompanionTriState.Unknown,
+                    "Dry-run mute received");
+                return;
+            }
+
             if (!teamsController.TryToggleMute())
             {
                 HostLog.Write("Toggle mute failed; Teams not found.");
@@ -117,10 +149,26 @@ namespace X3LaptopCompanion
         public void SendTestStatus()
         {
             HostLog.Write("Test status requested.");
-            RefreshTeamsPresence();
+            if (!IsTeamsDryRun)
+            {
+                RefreshTeamsPresence();
+            }
+            else
+            {
+                TeamsText = "Dry run";
+            }
+
             MicrophoneText = "Muted";
             CameraText = "Off";
-            DetailText = "Test status shown locally. BLE writes are disabled while test mode is on.";
+            if (IsTestMode)
+            {
+                DetailText = "Test status shown locally. BLE writes are disabled while test mode is on.";
+                return;
+            }
+
+            DetailText = "Test status sent over BLE without interacting with Teams.";
+            _ = connectionService.SendHostStatusAsync(true, CompanionTriState.Off, CompanionTriState.Off,
+                "BLE test status");
         }
 
         private void OnLoaded(object sender, RoutedEventArgs e)
@@ -180,6 +228,14 @@ namespace X3LaptopCompanion
 
         private void RefreshTeamsPresence()
         {
+            if (IsTeamsDryRun)
+            {
+                TeamsText = "Dry run";
+                CameraText = "Unknown";
+                MicrophoneText = "Unknown";
+                return;
+            }
+
             TeamsText = teamsController.IsTeamsRunning ? "Running" : "Not detected";
             CameraText = "Unknown";
             MicrophoneText = "Unknown";
@@ -193,8 +249,7 @@ namespace X3LaptopCompanion
                 return;
             }
 
-            _ = connectionService.SendHostStatusAsync(teamsController.IsTeamsRunning, CompanionTriState.Unknown,
-                CompanionTriState.Unknown, teamsController.IsTeamsRunning ? "Teams running" : "Teams not found");
+            SendCurrentHostStatus();
         }
 
         private void OnConnectionStatusChanged(object sender, CompanionConnectionStatus status)
@@ -206,8 +261,7 @@ namespace X3LaptopCompanion
                 DetailText = status.Message;
                 if (status.IsConnected)
                 {
-                    _ = connectionService.SendHostStatusAsync(teamsController.IsTeamsRunning, CompanionTriState.Unknown,
-                        CompanionTriState.Unknown, teamsController.IsTeamsRunning ? "Teams running" : "Teams not found");
+                    SendCurrentHostStatus();
                 }
             });
         }
@@ -239,6 +293,33 @@ namespace X3LaptopCompanion
             ConnectionText = "Disconnected";
             DetailText = "Test mode disabled. Scanning for the X3 companion service.";
             connectionService.Start();
+        }
+
+        private void ApplyTeamsDryRun()
+        {
+            HostLog.Write("Apply Teams dry run. enabled=" + IsTeamsDryRun);
+            TeamsModeText = IsTeamsDryRun ? "Dry run" : "Live Teams";
+            RefreshTeamsPresence();
+            DetailText = IsTeamsDryRun
+                ? "Teams dry run is active. BLE stays connected, but Teams will not be focused or controlled."
+                : "Teams dry run disabled. X3 mute commands will control Teams.";
+            if (!IsTestMode)
+            {
+                SendCurrentHostStatus();
+            }
+        }
+
+        private void SendCurrentHostStatus()
+        {
+            if (IsTeamsDryRun)
+            {
+                _ = connectionService.SendHostStatusAsync(true, CompanionTriState.Unknown, CompanionTriState.Unknown,
+                    "Teams dry run");
+                return;
+            }
+
+            _ = connectionService.SendHostStatusAsync(teamsController.IsTeamsRunning, CompanionTriState.Unknown,
+                CompanionTriState.Unknown, teamsController.IsTeamsRunning ? "Teams running" : "Teams not found");
         }
 
         private bool SetField(ref string field, string value, string propertyName)
