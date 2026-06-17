@@ -23,6 +23,7 @@ class CompanionBleService {
   void end();
   bool isRunning() const { return running; }
   bool isHostConnected() const { return hostConnected; }
+  bool isConnectionHandshakeActive() const;
   std::string getStatusText() const;
   HostStatus getHostStatus() const;
   bool consumeStatusChanged();
@@ -32,11 +33,14 @@ class CompanionBleService {
   void onHostConnected();
   void onHostDisconnected();
   void onHostStatusWritten(NimBLECharacteristic* characteristic);
+  void onDeviceCommandSubscribed(bool subscribed);
 
  private:
   CompanionBleService() = default;
 
+  void disconnectConnectedHosts();
   void publishDeviceInfo();
+  void publishAck(uint16_t sequence, uint8_t ackedMessageType);
   void publishDeviceCommand(uint8_t command);
 
   NimBLEServer* server = nullptr;
@@ -45,6 +49,8 @@ class CompanionBleService {
   NimBLECharacteristic* deviceInfoCharacteristic = nullptr;
   bool running = false;
   bool hostConnected = false;
+  bool hostStatusReceived = false;
+  bool deviceCommandSubscribed = false;
   bool ownsBluetoothStack = false;
   bool statusChanged = false;
   uint16_t commandSequence = 0;

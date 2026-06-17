@@ -66,6 +66,10 @@ bool LaptopCompanionActivity::suppressAutoDeepSleep() {
   return CompanionBleService::getInstance().isHostConnected();
 }
 
+bool LaptopCompanionActivity::preventAutoSleep() {
+  return CompanionBleService::getInstance().isConnectionHandshakeActive();
+}
+
 void LaptopCompanionActivity::render(RenderLock&&) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int pageWidth = renderer.getScreenWidth();

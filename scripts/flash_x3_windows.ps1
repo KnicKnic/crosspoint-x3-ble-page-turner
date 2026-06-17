@@ -1,5 +1,7 @@
 param(
-    [string]$Firmware = ".pio\build\gh_release\firmware.bin",
+    [ValidateSet("default", "gh_release", "gh_release_rc", "slim")]
+    [string]$Environment = "gh_release",
+    [string]$Firmware = "",
     [string]$Port = "",
     [int]$Baud = 921600,
     [switch]$Build,
@@ -63,8 +65,12 @@ function Find-X3Port {
 }
 
 if ($Build) {
-    Write-Host "Building gh_release firmware..."
-    pio run -e gh_release -j 4
+    Write-Host "Building $Environment firmware..."
+    pio run -e $Environment -j 4
+}
+
+if ([string]::IsNullOrWhiteSpace($Firmware)) {
+    $Firmware = ".pio\build\$Environment\firmware.bin"
 }
 
 $firmwarePath = Resolve-Path $Firmware
@@ -104,3 +110,4 @@ if (-not $SkipVerify) {
 
 Write-Host ""
 Write-Host "Flashed X3 firmware to app0 and app1 successfully."
+[console]::Beep()
