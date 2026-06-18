@@ -17,6 +17,13 @@ namespace X3LaptopCompanion
         private string cameraText = "Unknown";
         private bool isTestMode;
         private string testModeText = "Off";
+        private bool testTeamsDetected = true;
+        private CompanionTriState testMicrophone = CompanionTriState.Unknown;
+        private CompanionTriState testCamera = CompanionTriState.Unknown;
+        private string testMessage = "Test status";
+        private string testTeamsToggleText = "Detected";
+        private string testMicrophoneToggleText = "Unknown";
+        private string testCameraToggleText = "Unknown";
         private bool isTeamsDryRun;
         private string teamsModeText = "Live Teams";
         private string detailText =
@@ -77,6 +84,49 @@ namespace X3LaptopCompanion
         {
             get { return testModeText; }
             private set { SetField(ref testModeText, value, nameof(TestModeText)); }
+        }
+
+        public bool TestTeamsDetected
+        {
+            get { return testTeamsDetected; }
+            set
+            {
+                if (SetField(ref testTeamsDetected, value, nameof(TestTeamsDetected)))
+                {
+                    TestTeamsToggleText = testTeamsDetected ? "Detected" : "Not detected";
+                    OnTestStatusChanged("teams");
+                }
+            }
+        }
+
+        public string TestMessage
+        {
+            get { return testMessage; }
+            set
+            {
+                if (SetField(ref testMessage, value, nameof(TestMessage)) && IsTestMode)
+                {
+                    DetailText = "Test message updated. Press Send Test Status to push it to the X3.";
+                }
+            }
+        }
+
+        public string TestTeamsToggleText
+        {
+            get { return testTeamsToggleText; }
+            private set { SetField(ref testTeamsToggleText, value, nameof(TestTeamsToggleText)); }
+        }
+
+        public string TestMicrophoneToggleText
+        {
+            get { return testMicrophoneToggleText; }
+            private set { SetField(ref testMicrophoneToggleText, value, nameof(TestMicrophoneToggleText)); }
+        }
+
+        public string TestCameraToggleText
+        {
+            get { return testCameraToggleText; }
+            private set { SetField(ref testCameraToggleText, value, nameof(TestCameraToggleText)); }
         }
 
         public bool IsTeamsDryRun
@@ -149,6 +199,12 @@ namespace X3LaptopCompanion
         public void SendTestStatus()
         {
             HostLog.Write("Test status requested.");
+            if (IsTestMode)
+            {
+                SendTestHostStatus("manual");
+                return;
+            }
+
             if (!IsTeamsDryRun)
             {
                 RefreshTeamsPresence();
@@ -175,10 +231,7 @@ namespace X3LaptopCompanion
         {
             HostLog.Write("Main window loaded. TestMode=" + IsTestMode);
             RefreshTeamsPresence();
-            if (!IsTestMode)
-            {
-                connectionService.Start();
-            }
+            connectionService.Start();
             statusTimer.Start();
         }
 
@@ -202,6 +255,20 @@ namespace X3LaptopCompanion
         private void SendTestStatus_Click(object sender, RoutedEventArgs e)
         {
             SendTestStatus();
+        }
+
+        private void CycleTestMicrophone_Click(object sender, RoutedEventArgs e)
+        {
+            testMicrophone = NextTriState(testMicrophone);
+            TestMicrophoneToggleText = TriStateText(testMicrophone, "Muted", "Live");
+            OnTestStatusChanged("microphone");
+        }
+
+        private void CycleTestCamera_Click(object sender, RoutedEventArgs e)
+        {
+            testCamera = NextTriState(testCamera);
+            TestCameraToggleText = TriStateText(testCamera, "Off", "Active");
+            OnTestStatusChanged("camera");
         }
 
         private void OpenLog_Click(object sender, RoutedEventArgs e)
@@ -243,12 +310,14 @@ namespace X3LaptopCompanion
 
         private void OnStatusTimerTick(object sender, System.EventArgs e)
         {
-            RefreshTeamsPresence();
             if (IsTestMode)
             {
+                ApplyTestStatusToUi();
+                SendTestHostStatus("timer");
                 return;
             }
 
+            RefreshTeamsPresence();
             SendCurrentHostStatus();
         }
 
@@ -282,10 +351,11 @@ namespace X3LaptopCompanion
             HostLog.Write("Apply test mode. enabled=" + IsTestMode);
             if (IsTestMode)
             {
-                connectionService.Stop();
-                ConnectionText = "Test mode";
                 TestModeText = "On";
-                DetailText = "Test mode is active. BLE scanning is stopped; use Simulate X3 Press to test the host command path.";
+                ApplyTestStatusToUi();
+                DetailText = "Test mode is active. BLE stays connected and sends the simulated status to the X3.";
+                connectionService.Start();
+                SendTestHostStatus("enabled");
                 return;
             }
 
@@ -311,6 +381,12 @@ namespace X3LaptopCompanion
 
         private void SendCurrentHostStatus()
         {
+            if (IsTestMode)
+            {
+                SendTestHostStatus("current");
+                return;
+            }
+
             if (IsTeamsDryRun)
             {
                 _ = connectionService.SendHostStatusAsync(true, CompanionTriState.Unknown, CompanionTriState.Unknown,
@@ -320,6 +396,52 @@ namespace X3LaptopCompanion
 
             _ = connectionService.SendHostStatusAsync(teamsController.IsTeamsRunning, CompanionTriState.Unknown,
                 CompanionTriState.Unknown, teamsController.IsTeamsRunning ? "Teams running" : "Teams not found");
+        }
+
+        private void OnTestStatusChanged(string reason)
+        {
+            if (!IsTestMode)
+            {
+                return;
+            }
+
+            SendTestHostStatus(reason);
+        }
+
+        private void SendTestHostStatus(string reason)
+        {
+            ApplyTestStatusToUi();
+            var message = string.IsNullOrWhiteSpace(TestMessage) ? "Test status" : TestMessage;
+            DetailText = "Test mode sent " + reason + ": teams=" + TestTeamsToggleText +
+                ", mic=" + TestMicrophoneToggleText + ", camera=" + TestCameraToggleText + ".";
+            _ = connectionService.SendHostStatusAsync(TestTeamsDetected, testMicrophone, testCamera, message);
+        }
+
+        private void ApplyTestStatusToUi()
+        {
+            TeamsText = TestTeamsDetected ? "Detected (test)" : "Not detected (test)";
+            MicrophoneText = TestMicrophoneToggleText + " (test)";
+            CameraText = TestCameraToggleText + " (test)";
+        }
+
+        private static CompanionTriState NextTriState(CompanionTriState value)
+        {
+            if (value == CompanionTriState.Unknown)
+            {
+                return CompanionTriState.Off;
+            }
+
+            return value == CompanionTriState.Off ? CompanionTriState.On : CompanionTriState.Unknown;
+        }
+
+        private static string TriStateText(CompanionTriState value, string offText, string onText)
+        {
+            if (value == CompanionTriState.Off)
+            {
+                return offText;
+            }
+
+            return value == CompanionTriState.On ? onText : "Unknown";
         }
 
         private bool SetField(ref string field, string value, string propertyName)

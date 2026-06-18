@@ -22,6 +22,8 @@ namespace X3LaptopCompanion
         private GattCharacteristic hostStatusCharacteristic;
         private GattCharacteristic deviceCommandCharacteristic;
         private GattCharacteristic deviceInfoCharacteristic;
+        private readonly SemaphoreSlim hostStatusWriteLock = new SemaphoreSlim(1, 1);
+        private Timer scanWatchdogTimer;
         private ushort hostStatusSequence;
         private int connecting;
         private bool intentionallyPausedAdvertisementWatcher;
@@ -57,6 +59,7 @@ namespace X3LaptopCompanion
             advertisementWatcher.Start();
             HostLog.Write("BLE advertisement watcher started. Status=" + advertisementWatcher.Status +
                 " ServiceUuid=" + CompanionProtocol.ServiceUuid);
+            scanWatchdogTimer = new Timer(OnScanWatchdogTick, null, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
             PublishStatus(false, "Scanning for X3 companion service.");
         }
 
@@ -90,6 +93,8 @@ namespace X3LaptopCompanion
                 advertisementWatcher = null;
             }
 
+            scanWatchdogTimer?.Dispose();
+            scanWatchdogTimer = null;
             ResetGattState();
             HostLog.Write("BLE watcher/service stopped.");
             PublishStatus(false, "BLE scanning stopped.");
@@ -103,36 +108,45 @@ namespace X3LaptopCompanion
 
         public async Task SendHostStatusAsync(bool teamsDetected, CompanionTriState microphone, CompanionTriState camera, string message)
         {
-            if (hostStatusCharacteristic == null)
+            if (!await hostStatusWriteLock.WaitAsync(0))
             {
-                HostLog.Write("Host status skipped; host status characteristic is not available.");
+                HostLog.Write("Host status skipped; previous BLE write is still pending.");
                 return;
-            }
-
-            var writer = new DataWriter
-            {
-                ByteOrder = ByteOrder.LittleEndian
-            };
-            writer.WriteByte(CompanionProtocol.ProtocolVersion);
-            writer.WriteByte((byte)CompanionMessageType.HostStatus);
-            var sequence = hostStatusSequence++;
-            writer.WriteUInt16(sequence);
-            writer.WriteByte(teamsDetected ? (byte)1 : (byte)0);
-            writer.WriteByte((byte)microphone);
-            writer.WriteByte((byte)camera);
-            if (!string.IsNullOrWhiteSpace(message))
-            {
-                writer.WriteString(message.Length > 48 ? message.Substring(0, 48) : message);
             }
 
             try
             {
+                if (hostStatusCharacteristic == null)
+                {
+                    HostLog.Write("Host status skipped; host status characteristic is not available.");
+                    return;
+                }
+
+                var writer = new DataWriter
+                {
+                    ByteOrder = ByteOrder.LittleEndian
+                };
+                writer.WriteByte(CompanionProtocol.ProtocolVersion);
+                writer.WriteByte((byte)CompanionMessageType.HostStatus);
+                var sequence = hostStatusSequence++;
+                writer.WriteUInt16(sequence);
+                writer.WriteByte(teamsDetected ? (byte)1 : (byte)0);
+                writer.WriteByte((byte)microphone);
+                writer.WriteByte((byte)camera);
+                if (!string.IsNullOrWhiteSpace(message))
+                {
+                    writer.WriteString(message.Length > 48 ? message.Substring(0, 48) : message);
+                }
+
                 var buffer = writer.DetachBuffer();
+                var startedAt = DateTimeOffset.Now;
                 HostLog.Write("Host status write starting seq=" + sequence + " bytes=" + buffer.Length +
                     " option=WriteWithResponse properties=" + hostStatusCharacteristic.CharacteristicProperties);
                 var status = await hostStatusCharacteristic.WriteValueAsync(buffer, GattWriteOption.WriteWithResponse);
+                var elapsedMs = (DateTimeOffset.Now - startedAt).TotalMilliseconds;
                 HostLog.Write("Host status write seq=" + sequence + " status=" + status + " teams=" + teamsDetected +
-                    " mic=" + microphone + " camera=" + camera + " message=" + message);
+                    " mic=" + microphone + " camera=" + camera + " elapsedMs=" + elapsedMs.ToString("F0") +
+                    " message=" + message);
                 if (status != GattCommunicationStatus.Success)
                 {
                     ResetGattState();
@@ -146,6 +160,10 @@ namespace X3LaptopCompanion
                 ResetGattState();
                 RestartAdvertisementWatcherIfNeeded();
                 PublishStatus(false, "Host status write exception: " + ex.Message);
+            }
+            finally
+            {
+                hostStatusWriteLock.Release();
             }
         }
 
@@ -244,7 +262,13 @@ namespace X3LaptopCompanion
             }
             finally
             {
+                if (!IsConnected())
+                {
+                    ResetGattState();
+                }
+
                 Interlocked.Exchange(ref connecting, 0);
+                RestartAdvertisementWatcherIfNeeded();
             }
         }
 
@@ -449,6 +473,8 @@ namespace X3LaptopCompanion
                     " deviceCommand=" + (deviceCommandCharacteristic != null) + " deviceInfo=" +
                     (deviceInfoCharacteristic != null));
                 PublishStatus(false, "X3 companion service is missing required characteristics.");
+                ResetGattState();
+                RestartAdvertisementWatcherIfNeeded();
                 return;
             }
 
@@ -463,10 +489,22 @@ namespace X3LaptopCompanion
             if (status != GattCommunicationStatus.Success)
             {
                 PublishStatus(false, "Could not subscribe to X3 command notifications.");
+                ResetGattState();
+                RestartAdvertisementWatcherIfNeeded();
                 return;
             }
 
             PublishStatus(true, "Connected to X3 companion.");
+        }
+
+        private void OnScanWatchdogTick(object state)
+        {
+            if (disposed || IsConnected() || connecting != 0)
+            {
+                return;
+            }
+
+            EnsureScanningActive("watchdog");
         }
 
         private static async Task<GattCharacteristic> GetCharacteristicAsync(GattDeviceService service, Guid uuid, string name)
@@ -552,6 +590,42 @@ namespace X3LaptopCompanion
                 advertisementWatcher.Start();
                 HostLog.Write("BLE advertisement watcher restarted after unsuccessful GATT connection attempt. Status=" +
                     advertisementWatcher.Status);
+            }
+        }
+
+        private void EnsureScanningActive(string reason)
+        {
+            try
+            {
+                if (watcher != null &&
+                    watcher.Status != DeviceWatcherStatus.Started &&
+                    watcher.Status != DeviceWatcherStatus.EnumerationCompleted &&
+                    watcher.Status != DeviceWatcherStatus.Stopping)
+                {
+                    watcher.Start();
+                    HostLog.Write("BLE device watcher restarted by " + reason + ". Status=" + watcher.Status);
+                }
+            }
+            catch (Exception ex)
+            {
+                HostLog.Write("BLE device watcher restart failed from " + reason + ".", ex);
+            }
+
+            try
+            {
+                if (advertisementWatcher != null &&
+                    advertisementWatcher.Status != BluetoothLEAdvertisementWatcherStatus.Started &&
+                    advertisementWatcher.Status != BluetoothLEAdvertisementWatcherStatus.Stopping)
+                {
+                    intentionallyPausedAdvertisementWatcher = false;
+                    advertisementWatcher.Start();
+                    HostLog.Write("BLE advertisement watcher restarted by " + reason + ". Status=" +
+                        advertisementWatcher.Status);
+                }
+            }
+            catch (Exception ex)
+            {
+                HostLog.Write("BLE advertisement watcher restart failed from " + reason + ".", ex);
             }
         }
 

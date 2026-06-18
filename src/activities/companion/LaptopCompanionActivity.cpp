@@ -1,5 +1,6 @@
 #include "LaptopCompanionActivity.h"
 
+#include <Arduino.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
 
@@ -10,6 +11,8 @@
 #include "fontIds.h"
 
 namespace {
+constexpr unsigned long NO_HOST_WAKE_GRACE_MS = 10UL * 60UL * 1000UL;
+
 const char* triStateText(uint8_t state, const char* offText, const char* onText) {
   switch (state) {
     case static_cast<uint8_t>(CompanionProtocol::TriState::Off):
@@ -31,6 +34,8 @@ void LaptopCompanionActivity::onEnter() {
   } else {
     statusMessage = service.getStatusText();
   }
+  hostConnected = service.isHostConnected();
+  updateNoHostTimer(hostConnected);
   requestUpdate();
 }
 
@@ -42,6 +47,8 @@ void LaptopCompanionActivity::onExit() {
 
 void LaptopCompanionActivity::loop() {
   auto& service = CompanionBleService::getInstance();
+  service.update();
+  updateNoHostTimer(service.isHostConnected());
   if (service.consumeStatusChanged()) {
     const auto hostStatus = service.getHostStatus();
     hostConnected = service.isHostConnected();
@@ -63,11 +70,40 @@ void LaptopCompanionActivity::loop() {
 }
 
 bool LaptopCompanionActivity::suppressAutoDeepSleep() {
-  return CompanionBleService::getInstance().isHostConnected();
+  return shouldHoldWakeForCompanion();
 }
 
 bool LaptopCompanionActivity::preventAutoSleep() {
-  return CompanionBleService::getInstance().isConnectionHandshakeActive();
+  return shouldHoldWakeForCompanion();
+}
+
+void LaptopCompanionActivity::updateNoHostTimer(bool connected) {
+  hostConnected = connected;
+  if (hostConnected) {
+    noHostConnectedSinceMs = 0;
+    return;
+  }
+
+  if (noHostConnectedSinceMs == 0) {
+    noHostConnectedSinceMs = millis();
+  }
+}
+
+bool LaptopCompanionActivity::shouldHoldWakeForCompanion() const {
+  const auto& service = CompanionBleService::getInstance();
+  if (!service.isRunning()) {
+    return false;
+  }
+
+  if (service.isHostConnected()) {
+    return true;
+  }
+
+  if (noHostConnectedSinceMs == 0) {
+    return true;
+  }
+
+  return millis() - noHostConnectedSinceMs < NO_HOST_WAKE_GRACE_MS;
 }
 
 void LaptopCompanionActivity::render(RenderLock&&) {

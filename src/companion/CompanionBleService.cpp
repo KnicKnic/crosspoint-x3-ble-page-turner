@@ -14,6 +14,10 @@
 #include "CompanionProtocol.h"
 
 namespace {
+constexpr unsigned long COMPANION_MAINTENANCE_INTERVAL_MS = 2000;
+constexpr unsigned long COMPANION_HANDSHAKE_TIMEOUT_MS = 15000;
+constexpr unsigned long COMPANION_ADVERTISING_RESTART_INTERVAL_MS = 5000;
+
 CompanionBleService* g_service = nullptr;
 
 class CompanionServerCallbacks : public NimBLEServerCallbacks {
@@ -39,7 +43,7 @@ class CompanionServerCallbacks : public NimBLEServerCallbacks {
       g_service->onHostDisconnected();
     }
     if (pServer && g_service && g_service->isRunning()) {
-      NimBLEDevice::startAdvertising();
+      g_service->restartAdvertising("disconnect");
     }
   }
 };
@@ -184,9 +188,12 @@ bool CompanionBleService::begin() {
 
   running = true;
   hostConnected = false;
+  hostConnectedAtMs = 0;
   hostStatusReceived = false;
   deviceCommandSubscribed = false;
   statusChanged = true;
+  lastMaintenanceAtMs = millis();
+  lastAdvertisingRestartAtMs = 0;
   BluetoothDiagnostics::record("companion_ble_started");
   LOG_INF("COMP", "Companion BLE service started");
   return true;
@@ -201,6 +208,7 @@ void CompanionBleService::end() {
   running = false;
   disconnectConnectedHosts();
   hostConnected = false;
+  hostConnectedAtMs = 0;
   hostStatusReceived = false;
   deviceCommandSubscribed = false;
   statusChanged = true;
@@ -237,6 +245,14 @@ void CompanionBleService::disconnectConnectedHosts() {
   delay(150);
 }
 
+bool CompanionBleService::hasConnectedHosts() const {
+  if (!server) {
+    return false;
+  }
+
+  return !server->getPeerDevices().empty();
+}
+
 std::string CompanionBleService::getStatusText() const {
   if (!running) {
     return "BLE failed";
@@ -251,6 +267,51 @@ CompanionBleService::HostStatus CompanionBleService::getHostStatus() const { ret
 
 bool CompanionBleService::isConnectionHandshakeActive() const {
   return hostConnected && (!deviceCommandSubscribed || !hostStatusReceived);
+}
+
+void CompanionBleService::update() {
+  if (!running || !server) {
+    return;
+  }
+
+  const unsigned long now = millis();
+  if (now - lastMaintenanceAtMs < COMPANION_MAINTENANCE_INTERVAL_MS) {
+    return;
+  }
+  lastMaintenanceAtMs = now;
+
+  const bool hasPeers = hasConnectedHosts();
+  if (hostConnected && !hasPeers) {
+    LOG_INF("COMP", "Recovering missed host disconnect; no active peer remains");
+    BluetoothDiagnostics::record("companion_missed_disconnect_recovered");
+    onHostDisconnected();
+    restartAdvertising("missed_disconnect");
+    return;
+  }
+
+  if (!hostConnected && !hasPeers) {
+    auto* advertising = NimBLEDevice::getAdvertising();
+    if (!advertising || !advertising->isAdvertising()) {
+      restartAdvertising("idle_maintenance");
+    }
+    return;
+  }
+
+  if (isConnectionHandshakeActive() && hostConnectedAtMs != 0 &&
+      now - hostConnectedAtMs > COMPANION_HANDSHAKE_TIMEOUT_MS) {
+    LOG_INF("COMP", "Disconnecting stale companion host handshake; subscribed=%d statusReceived=%d ageMs=%lu",
+            deviceCommandSubscribed, hostStatusReceived, now - hostConnectedAtMs);
+    BluetoothDiagnostics::recordf("companion_stale_handshake_disconnect", "sub=%d status=%d ageMs=%lu",
+                                  deviceCommandSubscribed, hostStatusReceived, now - hostConnectedAtMs);
+    disconnectConnectedHosts();
+    hostConnected = false;
+    hostConnectedAtMs = 0;
+    hostStatusReceived = false;
+    deviceCommandSubscribed = false;
+    statusChanged = true;
+    notifyStatusChanged();
+    restartAdvertising("stale_handshake");
+  }
 }
 
 bool CompanionBleService::consumeStatusChanged() {
@@ -276,26 +337,24 @@ void CompanionBleService::setStatusChangedCallback(std::function<void()> callbac
 
 void CompanionBleService::onHostConnected() {
   hostConnected = true;
+  hostConnectedAtMs = millis();
   hostStatusReceived = false;
   deviceCommandSubscribed = false;
   statusChanged = true;
   BluetoothDiagnostics::record("companion_host_connected");
   LOG_INF("COMP", "Host connected to companion BLE service");
-  if (statusChangedCallback) {
-    statusChangedCallback();
-  }
+  notifyStatusChanged();
 }
 
 void CompanionBleService::onHostDisconnected() {
   hostConnected = false;
+  hostConnectedAtMs = 0;
   hostStatusReceived = false;
   deviceCommandSubscribed = false;
   statusChanged = true;
   BluetoothDiagnostics::record("companion_host_disconnected");
   LOG_INF("COMP", "Host disconnected from companion BLE service");
-  if (statusChangedCallback) {
-    statusChangedCallback();
-  }
+  notifyStatusChanged();
 }
 
 void CompanionBleService::onHostStatusWritten(NimBLECharacteristic* characteristic) {
@@ -328,14 +387,47 @@ void CompanionBleService::onHostStatusWritten(NimBLECharacteristic* characterist
   LOG_INF("COMP", "Host status seq=%u teams=%d mic=%u camera=%u msg=%s", static_cast<unsigned>(next.sequence),
           next.teamsDetected, static_cast<unsigned>(next.microphone), static_cast<unsigned>(next.camera),
           next.message.c_str());
-  if (statusChangedCallback) {
-    statusChangedCallback();
-  }
+  notifyStatusChanged();
 }
 
 void CompanionBleService::onDeviceCommandSubscribed(bool subscribed) {
   deviceCommandSubscribed = subscribed;
   statusChanged = true;
+  if (subscribed) {
+    LOG_INF("COMP", "Companion host command notifications subscribed");
+  }
+  notifyStatusChanged();
+}
+
+bool CompanionBleService::restartAdvertising(const char* reason) {
+  if (!running) {
+    return false;
+  }
+
+  if (hasConnectedHosts()) {
+    LOG_DBG("COMP", "Advertising restart skipped; host peer still connected reason=%s", reason ? reason : "");
+    return false;
+  }
+
+  const unsigned long now = millis();
+  auto* advertising = NimBLEDevice::getAdvertising();
+  if (advertising && advertising->isAdvertising()) {
+    return true;
+  }
+
+  if (lastAdvertisingRestartAtMs != 0 &&
+      now - lastAdvertisingRestartAtMs < COMPANION_ADVERTISING_RESTART_INTERVAL_MS) {
+    return false;
+  }
+
+  lastAdvertisingRestartAtMs = now;
+  const bool ok = NimBLEDevice::startAdvertising();
+  LOG_INF("COMP", "Advertising restart reason=%s ok=%d", reason ? reason : "", ok);
+  BluetoothDiagnostics::recordf("companion_advertising_restart", "reason=%s ok=%d", reason ? reason : "", ok);
+  return ok;
+}
+
+void CompanionBleService::notifyStatusChanged() {
   if (statusChangedCallback) {
     statusChangedCallback();
   }

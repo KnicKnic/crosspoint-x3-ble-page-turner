@@ -6,9 +6,9 @@
         xmlns:local="clr-namespace:X3LaptopCompanion"
         mc:Ignorable="d"
         Title="X3 Laptop Companion"
-        Height="420"
+        Height="520"
         Width="620"
-        MinHeight="380"
+        MinHeight="500"
         MinWidth="560"
         WindowStartupLocation="CenterScreen">
     <Grid Margin="24">
@@ -75,6 +75,42 @@
             <CheckBox Content="Teams dry run"
                       IsChecked="{Binding IsTeamsDryRun, Mode=TwoWay}"
                       Margin="0,0,0,10" />
+            <GroupBox Header="Test status"
+                      Margin="0,0,0,10">
+                <Grid Margin="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="120" />
+                        <ColumnDefinition Width="120" />
+                        <ColumnDefinition Width="120" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <CheckBox Content="{Binding TestTeamsToggleText}"
+                              IsChecked="{Binding TestTeamsDetected, Mode=TwoWay}"
+                              VerticalAlignment="Center"
+                              Margin="0,0,8,8" />
+                    <Button Grid.Column="1"
+                            Content="{Binding TestMicrophoneToggleText}"
+                            Margin="0,0,8,8"
+                            Click="CycleTestMicrophone_Click" />
+                    <Button Grid.Column="2"
+                            Content="{Binding TestCameraToggleText}"
+                            Margin="0,0,8,8"
+                            Click="CycleTestCamera_Click" />
+                    <TextBox Grid.Column="3"
+                             Text="{Binding TestMessage, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                             Margin="0,0,0,8" />
+
+                    <TextBlock Grid.Row="1"
+                               Grid.ColumnSpan="4"
+                               Text="Enable test mode to send these simulated values over BLE."
+                               Foreground="#555555" />
+                </Grid>
+            </GroupBox>
             <TextBlock Text="{Binding DetailText}"
                        TextWrapping="Wrap"
                        Foreground="#333333" />

@@ -14,8 +14,8 @@
 - Subscribes to device-command notifications.
 - Sends best-effort Teams presence status to the X3.
 - Handles `ToggleMute` by focusing Teams when possible and sending `Ctrl+Shift+M`.
-- Includes a test mode that stops BLE scanning and lets you simulate an X3 mute
-  button press from the host UI.
+- Includes a test mode that keeps BLE active and sends simulated Teams,
+  microphone, camera, and status-message values to the X3.
 - Includes a Teams dry-run mode that keeps BLE active and acknowledges X3 mute
   commands without focusing or controlling Teams.
 - Writes a diagnostic log to `%LOCALAPPDATA%\X3LaptopCompanion\host.log`.

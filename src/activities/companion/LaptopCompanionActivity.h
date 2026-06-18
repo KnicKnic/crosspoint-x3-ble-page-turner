@@ -6,9 +6,13 @@
 
 class LaptopCompanionActivity final : public Activity {
   bool hostConnected = false;
+  unsigned long noHostConnectedSinceMs = 0;
   std::string statusMessage = "Waiting for host";
   std::string microphoneMessage = "Unknown";
   std::string cameraMessage = "Unknown";
+
+  void updateNoHostTimer(bool connected);
+  bool shouldHoldWakeForCompanion() const;
 
  public:
   explicit LaptopCompanionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)

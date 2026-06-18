@@ -24,6 +24,8 @@ class CompanionBleService {
   bool isRunning() const { return running; }
   bool isHostConnected() const { return hostConnected; }
   bool isConnectionHandshakeActive() const;
+  void update();
+  bool restartAdvertising(const char* reason);
   std::string getStatusText() const;
   HostStatus getHostStatus() const;
   bool consumeStatusChanged();
@@ -39,6 +41,8 @@ class CompanionBleService {
   CompanionBleService() = default;
 
   void disconnectConnectedHosts();
+  bool hasConnectedHosts() const;
+  void notifyStatusChanged();
   void publishDeviceInfo();
   void publishAck(uint16_t sequence, uint8_t ackedMessageType);
   void publishDeviceCommand(uint8_t command);
@@ -53,6 +57,9 @@ class CompanionBleService {
   bool deviceCommandSubscribed = false;
   bool ownsBluetoothStack = false;
   bool statusChanged = false;
+  unsigned long hostConnectedAtMs = 0;
+  unsigned long lastMaintenanceAtMs = 0;
+  unsigned long lastAdvertisingRestartAtMs = 0;
   uint16_t commandSequence = 0;
   HostStatus hostStatus;
   std::function<void()> statusChangedCallback;
