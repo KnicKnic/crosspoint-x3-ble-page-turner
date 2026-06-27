@@ -1,6 +1,6 @@
 param(
     [ValidateSet("default", "gh_release", "gh_release_rc", "slim")]
-    [string]$Environment = "gh_release",
+    [string]$Environment = "default",
     [string]$Firmware = "",
     [string]$Port = "",
     [int]$Baud = 921600,
@@ -65,8 +65,7 @@ function Find-X3Port {
 }
 
 if ($Build) {
-    Write-Host "Building $Environment firmware..."
-    pio run -e $Environment -j 4
+    & (Join-Path $PSScriptRoot "build_x3_windows.ps1") -Environment $Environment
 }
 
 if ([string]::IsNullOrWhiteSpace($Firmware)) {
@@ -90,6 +89,7 @@ Write-Host "Firmware: $firmwarePath"
 Write-Host ("Size:     0x{0:x} bytes" -f $firmwareInfo.Length)
 Write-Host "SHA-256:  $sha256"
 Write-Host "Port:     $Port"
+Write-Host "Baud:     $Baud"
 Write-Host "esptool:  $esptool"
 Write-Host ""
 

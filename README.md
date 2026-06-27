@@ -140,14 +140,23 @@ flash port, run:
 python3 scripts/diagnose_x3_usb_visibility.py
 ```
 
-On Windows, build and flash the current local firmware image with:
+On Windows, build the current local firmware image with:
+
+```powershell
+.\scripts\build_x3_windows.ps1
+```
+
+Build and flash it with:
 
 ```powershell
 .\scripts\flash_x3_windows.ps1 -Build
 ```
 
 The Windows helper writes and verifies both OTA app slots. Pass `-Port COM3` if
-more than one candidate ESP32-C3 serial port is connected.
+more than one candidate ESP32-C3 serial port is connected. To try a faster flash,
+pass a higher baud rate such as `-Baud 1500000`; if that is unreliable, fall
+back to the default `921600`. `-SkipVerify` is faster but skips the post-write
+verification step.
 
 After flashing, enable Bluetooth from Settings, choose `Pair New Remote` for a
 new Free2/Free3-style remote, or use `Reconnect Remote` for an already saved
@@ -215,22 +224,20 @@ git submodule update --init --recursive
 
 ### Building firmware
 
-Build the release firmware image with PlatformIO:
-
-```sh
-pio run -e gh_release
-```
-
-The output image is written to `.pio/build/gh_release/firmware.bin`.
-
-On Windows, if PlatformIO is running under Python 3.13 and the build fails while
-printing translated language names, force UTF-8 before running PlatformIO:
+Build the default firmware image with the Windows helper:
 
 ```powershell
-$env:PYTHONUTF8='1'
-$env:PYTHONIOENCODING='utf-8'
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
-pio run -e gh_release -j 4
+.\scripts\build_x3_windows.ps1
+```
+
+The output image is written to `.pio/build/default/firmware.bin`.
+
+The Windows build helper sets UTF-8 output and prefers PlatformIO's own virtualenv
+executable, which avoids Python 3.13/PATH issues with PlatformIO dependencies.
+To build a release environment explicitly, pass `-Environment gh_release`.
+
+```powershell
+.\scripts\build_x3_windows.ps1 -Environment gh_release
 ```
 
 ### Flashing your device

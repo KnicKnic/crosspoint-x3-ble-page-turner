@@ -27,6 +27,12 @@ const char* triStateText(uint8_t state, const char* offText, const char* onText)
 
 void LaptopCompanionActivity::onEnter() {
   Activity::onEnter();
+  hostConnected = false;
+  noHostConnectedSinceMs = 0;
+  statusMessage = "Waiting for host";
+  microphoneMessage = "Unknown";
+  cameraMessage = "Unknown";
+
   auto& service = CompanionBleService::getInstance();
   service.setStatusChangedCallback([this] { requestUpdate(); });
   if (!service.begin()) {
