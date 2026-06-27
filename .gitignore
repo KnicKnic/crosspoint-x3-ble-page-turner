@@ -17,3 +17,9 @@ build
 .history/
 /.venv
 *.local*
+/.dummy/
+/CMakeLists.txt
+/dependencies.lock
+/managed_components/
+/sdkconfig.default
+/sdkconfig.defaults

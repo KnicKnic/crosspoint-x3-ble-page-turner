@@ -2,6 +2,7 @@
 
 #include <Logging.h>
 #include <WiFi.h>
+#include <driver/gpio.h>
 #include <esp_sleep.h>
 
 #include <cassert>
