@@ -24,4 +24,5 @@ class LaptopCompanionActivity final : public Activity {
   void render(RenderLock&&) override;
   bool preventAutoSleep() override;
   bool suppressAutoDeepSleep() override;
+  bool isCompanionActivity() const override { return true; }
 };

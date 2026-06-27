@@ -248,6 +248,10 @@ bool ActivityManager::suppressAutoDeepSleep() const {
 
 bool ActivityManager::isReaderActivity() const { return currentActivity && currentActivity->isReaderActivity(); }
 
+bool ActivityManager::isCompanionActivity() const {
+  return currentActivity && currentActivity->isCompanionActivity();
+}
+
 bool ActivityManager::skipLoopDelay() const { return currentActivity && currentActivity->skipLoopDelay(); }
 
 ScreenshotInfo ActivityManager::getScreenshotInfo() const {

@@ -205,6 +205,7 @@ void enterDeepSleep() {
   }
 
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
+  APP_STATE.lastSleepFromCompanion = activityManager.isCompanionActivity();
   APP_STATE.saveToFile();
 
   if (btMgr.isEnabled()) {
@@ -356,6 +357,16 @@ void setup() {
   if (HalSystem::isRebootFromPanic()) {
     // If we rebooted from a panic, go to crash report screen to show the panic info
     activityManager.goToCrashReport();
+  } else if (APP_STATE.lastSleepFromCompanion) {
+    APP_STATE.lastSleepFromCompanion = false;
+    APP_STATE.lastSleepFromReader = false;
+    APP_STATE.saveToFile();
+
+    if (mappedInputManager.isPressed(MappedInputManager::Button::Back)) {
+      activityManager.goHome();
+    } else {
+      activityManager.goToLaptopCompanion();
+    }
   } else if (APP_STATE.openEpubPath.empty() || !APP_STATE.lastSleepFromReader ||
              mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {
     // Boot to home screen if no book is open, last sleep was not from reader, back button is held, or reader activity
