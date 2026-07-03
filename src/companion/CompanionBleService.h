@@ -46,6 +46,7 @@ class CompanionBleService {
   void onHostCameraStateWritten(NimBLECharacteristic* characteristic);
   void onHostStatusMessageWritten(NimBLECharacteristic* characteristic);
   void onButtonEventSubscribed(bool subscribed);
+  void scheduleAdvertisingRestart(const char* reason, unsigned long delayMs);
 
  private:
   CompanionBleService() = default;
@@ -80,8 +81,11 @@ class CompanionBleService {
   unsigned long lastMaintenanceAtMs = 0;
   unsigned long lastStateLogAtMs = 0;
   unsigned long lastAdvertisingRestartAtMs = 0;
+  unsigned long pendingAdvertisingRestartAtMs = 0;
   unsigned long lastConnParamRequestAtMs = 0;
   unsigned long responsiveUntilMs = 0;
+  bool advertisingRestartPending = false;
+  const char* pendingAdvertisingRestartReason = nullptr;
   uint16_t buttonEventSequence = 0;
   HostStatus hostStatus;
   std::function<void()> statusChangedCallback;

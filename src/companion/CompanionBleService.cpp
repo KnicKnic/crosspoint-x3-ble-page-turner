@@ -18,6 +18,7 @@ constexpr unsigned long COMPANION_MAINTENANCE_INTERVAL_MS = 2000;
 constexpr unsigned long COMPANION_STATE_LOG_INTERVAL_MS = 15000;
 constexpr unsigned long COMPANION_HANDSHAKE_TIMEOUT_MS = 15000;
 constexpr unsigned long COMPANION_ADVERTISING_RESTART_INTERVAL_MS = 5000;
+constexpr unsigned long COMPANION_DISCONNECT_ADVERTISING_RESTART_DELAY_MS = 250;
 constexpr unsigned long COMPANION_CONN_PARAM_REQUEST_MIN_INTERVAL_MS = 2500;
 constexpr unsigned long COMPANION_BUTTON_RESPONSIVE_WINDOW_MS = 5000;
 constexpr size_t COMPANION_STATUS_MESSAGE_MAX_LEN = 48;
@@ -87,9 +88,7 @@ class CompanionServerCallbacks : public NimBLEServerCallbacks {
                                   static_cast<unsigned>(connInfo.getConnHandle()), reason);
     if (g_service) {
       g_service->onHostDisconnected();
-    }
-    if (pServer && g_service && g_service->isRunning()) {
-      g_service->restartAdvertising("disconnect");
+      g_service->scheduleAdvertisingRestart("disconnect", COMPANION_DISCONNECT_ADVERTISING_RESTART_DELAY_MS);
     }
   }
 
@@ -294,6 +293,9 @@ bool CompanionBleService::begin() {
   running = true;
   resetSessionState();
   publishHostStateValues();
+  advertisingRestartPending = false;
+  pendingAdvertisingRestartAtMs = 0;
+  pendingAdvertisingRestartReason = nullptr;
   statusChanged = true;
   lastMaintenanceAtMs = millis();
   lastStateLogAtMs = 0;
@@ -314,6 +316,9 @@ void CompanionBleService::end() {
 
   NimBLEDevice::stopAdvertising();
   running = false;
+  advertisingRestartPending = false;
+  pendingAdvertisingRestartAtMs = 0;
+  pendingAdvertisingRestartReason = nullptr;
   disconnectConnectedHosts();
   resetSessionState();
   publishHostStateValues();
@@ -397,17 +402,31 @@ void CompanionBleService::update() {
   }
 
   const unsigned long now = millis();
-  if (now - lastMaintenanceAtMs < COMPANION_MAINTENANCE_INTERVAL_MS) {
+  const bool pendingRestartDue =
+      advertisingRestartPending && static_cast<long>(now - pendingAdvertisingRestartAtMs) >= 0;
+  if (!pendingRestartDue && now - lastMaintenanceAtMs < COMPANION_MAINTENANCE_INTERVAL_MS) {
     return;
   }
   lastMaintenanceAtMs = now;
 
   const bool hasPeers = hasConnectedHosts();
+  if (advertisingRestartPending && static_cast<long>(now - pendingAdvertisingRestartAtMs) >= 0) {
+    const char* reason = pendingAdvertisingRestartReason ? pendingAdvertisingRestartReason : "pending";
+    advertisingRestartPending = false;
+    pendingAdvertisingRestartReason = nullptr;
+    if (restartAdvertising(reason)) {
+      return;
+    }
+    if (!hostConnected) {
+      scheduleAdvertisingRestart(reason, COMPANION_MAINTENANCE_INTERVAL_MS);
+    }
+  }
+
   if (hostConnected && !hasPeers) {
     LOG_INF("COMP", "Recovering missed host disconnect; no active peer remains");
     BluetoothDiagnostics::record("companion_missed_disconnect_recovered");
     onHostDisconnected();
-    restartAdvertising("missed_disconnect");
+    scheduleAdvertisingRestart("missed_disconnect", COMPANION_DISCONNECT_ADVERTISING_RESTART_DELAY_MS);
     return;
   }
 
@@ -470,6 +489,9 @@ void CompanionBleService::onHostConnected() {
 }
 
 void CompanionBleService::onHostConnected(uint16_t connHandle) {
+  advertisingRestartPending = false;
+  pendingAdvertisingRestartAtMs = 0;
+  pendingAdvertisingRestartReason = nullptr;
   resetSessionState();
   hostConnected = true;
   hostConnHandle = connHandle;
@@ -490,6 +512,18 @@ void CompanionBleService::onHostDisconnected() {
   LOG_INF("COMP", "Host disconnected; host state reset to defaults");
   logStateSnapshot("disconnect");
   notifyStatusChanged();
+}
+
+void CompanionBleService::scheduleAdvertisingRestart(const char* reason, unsigned long delayMs) {
+  if (!running) {
+    return;
+  }
+
+  advertisingRestartPending = true;
+  pendingAdvertisingRestartAtMs = millis() + delayMs;
+  pendingAdvertisingRestartReason = reason;
+  LOG_INF("COMP", "Advertising restart scheduled reason=%s delayMs=%lu", reason ? reason : "",
+          static_cast<unsigned long>(delayMs));
 }
 
 void CompanionBleService::onConnParamsUpdated(uint16_t interval, uint16_t latency, uint16_t timeout) {
@@ -658,9 +692,13 @@ bool CompanionBleService::restartAdvertising(const char* reason) {
     return false;
   }
 
-  if (hasConnectedHosts()) {
+  const bool hasPeers = hasConnectedHosts();
+  if (hasPeers && hostConnected) {
     LOG_DBG("COMP", "Advertising restart skipped; host peer still connected reason=%s", reason ? reason : "");
     return false;
+  }
+  if (hasPeers) {
+    LOG_INF("COMP", "Advertising restart continuing with stale peer list reason=%s", reason ? reason : "");
   }
 
   const unsigned long now = millis();
