@@ -161,6 +161,19 @@ void SettingsActivity::toggleCurrentSetting() {
     // Toggle the boolean value using the member pointer
     const bool currentValue = SETTINGS.*(setting.valuePtr);
     SETTINGS.*(setting.valuePtr) = !currentValue;
+    if (setting.nameId == StrId::STR_SERIAL_LOGGING) {
+      setSerialLogOutputEnabled(SETTINGS.serialLoggingEnabled != 0);
+      if (SETTINGS.serialLoggingEnabled) {
+        Serial.begin(115200);
+        const unsigned long start = millis();
+        while (!Serial && (millis() - start) < 500) {
+          delay(10);
+        }
+      } else {
+        logSerial.flush();
+        logSerial.end();
+      }
+    }
   } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
     SETTINGS.*(setting.valuePtr) = (currentValue + 1) % static_cast<uint8_t>(setting.enumValues.size());

@@ -4,6 +4,9 @@ param(
     [string]$Firmware = "",
     [string]$Port = "",
     [int]$Baud = 921600,
+    [Alias("StartSerial", "Serial")]
+    [switch]$Monitor,
+    [int]$MonitorBaud = 115200,
     [switch]$Build,
     [switch]$SkipVerify
 )
@@ -40,6 +43,20 @@ function Find-Esptool {
     }
 
     throw "esptool not found. Build once with PlatformIO or install PlatformIO first."
+}
+
+function Find-PlatformIO {
+    $penvPio = Join-Path $env:USERPROFILE ".platformio\penv\Scripts\pio.exe"
+    if (Test-Path $penvPio) {
+        return $penvPio
+    }
+
+    $fromPath = Get-Command pio -ErrorAction SilentlyContinue
+    if ($fromPath) {
+        return $fromPath.Source
+    }
+
+    throw "pio not found. Install PlatformIO first."
 }
 
 function Find-X3Port {
@@ -111,3 +128,11 @@ if (-not $SkipVerify) {
 Write-Host ""
 Write-Host "Flashed X3 firmware to app0 and app1 successfully."
 [console]::Beep()
+
+if ($Monitor) {
+    $pio = Find-PlatformIO
+    Write-Host ""
+    Write-Host "Opening serial monitor on $Port at $MonitorBaud baud with $pio..."
+    Write-Host "Press Ctrl+C to close the monitor."
+    & $pio device monitor -p $Port -b $MonitorBaud
+}

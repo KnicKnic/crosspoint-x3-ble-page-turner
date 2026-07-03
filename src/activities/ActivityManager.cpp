@@ -14,6 +14,8 @@
 #include "network/CrossPointWebServerActivity.h"
 #include "reader/ReaderActivity.h"
 #include "settings/BluetoothSettingsActivity.h"
+#include "settings/BatteryDrainActivity.h"
+#include "settings/HardwareTestActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
 #include "util/FullScreenMessageActivity.h"
@@ -182,6 +184,14 @@ void ActivityManager::goToBluetoothSettings(bool exitOnSuccessfulConnect) {
   pushActivity(std::make_unique<BluetoothSettingsActivity>(renderer, mappedInput,
                                                            [] { activityManager.popActivity(); },
                                                            exitOnSuccessfulConnect));
+}
+
+void ActivityManager::goToHardwareTest() {
+  replaceActivity(std::make_unique<HardwareTestActivity>(renderer, mappedInput));
+}
+
+void ActivityManager::goToBatteryDrain() {
+  replaceActivity(std::make_unique<BatteryDrainActivity>(renderer, mappedInput));
 }
 
 void ActivityManager::goToFileBrowser(std::string path) {

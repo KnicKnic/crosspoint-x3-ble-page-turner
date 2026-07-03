@@ -268,16 +268,7 @@ void setup() {
   gpio.begin();
   powerManager.begin();
   halTiltSensor.begin();
-
-#ifdef ENABLE_SERIAL_LOG
-  if (gpio.isUsbConnected()) {
-    Serial.begin(115200);
-    const unsigned long start = millis();
-    while (!Serial && (millis() - start) < 500) {
-      delay(10);
-    }
-  }
-#endif
+  setSerialLogOutputEnabled(false);
 
   LOG_INF("MAIN", "Hardware detect: %s", gpio.deviceIsX3() ? "X3" : "X4");
 
@@ -295,6 +286,16 @@ void setup() {
   BluetoothDiagnostics::flushToStorage(true);
 
   SETTINGS.loadFromFile();
+  setSerialLogOutputEnabled(SETTINGS.serialLoggingEnabled != 0);
+#ifdef ENABLE_SERIAL_LOG
+  if (SETTINGS.serialLoggingEnabled) {
+    Serial.begin(115200);
+    const unsigned long start = millis();
+    while (!Serial && (millis() - start) < 500) {
+      delay(10);
+    }
+  }
+#endif
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   KOREADER_STORE.loadFromFile();
   OPDS_STORE.loadFromFile();
@@ -409,7 +410,7 @@ void loop() {
 
   renderer.setFadingFix(SETTINGS.fadingFix);
 
-  if (Serial && millis() - lastMemPrint >= 10000) {
+  if (SETTINGS.serialLoggingEnabled && Serial && millis() - lastMemPrint >= 10000) {
     LOG_INF("MEM", "Free: %d bytes, Total: %d bytes, Min Free: %d bytes, MaxAlloc: %d bytes", ESP.getFreeHeap(),
             ESP.getHeapSize(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap());
     lastMemPrint = millis();
@@ -417,7 +418,7 @@ void loop() {
 
   // Handle incoming serial commands,
   // nb: we use logSerial from logging to avoid deprecation warnings
-  if (logSerial.available() > 0) {
+  if (SETTINGS.serialLoggingEnabled && logSerial.available() > 0) {
     String line = logSerial.readStringUntil('\n');
     if (line.startsWith("CMD:")) {
       String cmd = line.substring(4);

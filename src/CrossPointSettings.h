@@ -209,6 +209,8 @@ class CrossPointSettings {
   uint8_t showHiddenFiles = 0;
   // Bluetooth enabled state and bonded remote metadata.
   uint8_t bluetoothEnabled = 0;
+  // Runtime USB serial log output. Disabled by default; enable from Settings > System.
+  uint8_t serialLoggingEnabled = 0;
   char bleBondedDeviceAddr[18] = "";
   char bleBondedDeviceName[32] = "";
   uint8_t bleBondedDeviceAddrType = 0;

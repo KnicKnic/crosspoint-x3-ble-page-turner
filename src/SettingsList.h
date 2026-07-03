@@ -86,6 +86,8 @@ inline const std::vector<SettingInfo>& getSettingsList() {
                             StrId::STR_CAT_SYSTEM),
         SettingInfo::Toggle(StrId::STR_BLUETOOTH, &CrossPointSettings::bluetoothEnabled, "bluetoothEnabled",
                             StrId::STR_CAT_SYSTEM),
+        SettingInfo::Toggle(StrId::STR_SERIAL_LOGGING, &CrossPointSettings::serialLoggingEnabled,
+                            "serialLoggingEnabled", StrId::STR_CAT_SYSTEM),
 
         // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
         SettingInfo::DynamicString(

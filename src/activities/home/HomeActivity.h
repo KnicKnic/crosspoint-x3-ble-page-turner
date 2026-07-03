@@ -24,6 +24,8 @@ class HomeActivity final : public Activity {
   void onFileBrowserOpen();
   void onRecentsOpen();
   void onSettingsOpen();
+  void onHardwareTestOpen();
+  void onBatteryDrainOpen();
   void onFileTransferOpen();
   void onLaptopCompanionOpen();
   void onOpdsBrowserOpen();
