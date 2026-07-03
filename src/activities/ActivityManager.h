@@ -82,6 +82,7 @@ class ActivityManager {
   void goToLaptopCompanion();
   void goToSettings();
   void goToBluetoothSettings(bool exitOnSuccessfulConnect = false);
+  void goToClock();
   void goToHardwareTest();
   void goToBatteryDrain();
   void goToFileBrowser(std::string path = {});

@@ -21,7 +21,7 @@
 #include "fontIds.h"
 
 int HomeActivity::getMenuItemCount() const {
-  int count = 7;  // Laptop Companion, File Browser, Recents, File transfer, Hardware Test, Battery Drain, Settings
+  int count = 8;  // Laptop Companion, File Browser, Recents, Clock, File transfer, Hardware Test, Battery Drain, Settings
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
@@ -192,6 +192,7 @@ void HomeActivity::loop() {
     const int fileBrowserIdx = idx++;
     const int recentsIdx = idx++;
     const int opdsLibraryIdx = hasOpdsServers ? idx++ : -1;
+    const int clockIdx = idx++;
     const int fileTransferIdx = idx++;
     const int hardwareTestIdx = idx++;
     const int batteryDrainIdx = idx++;
@@ -207,6 +208,8 @@ void HomeActivity::loop() {
       onRecentsOpen();
     } else if (menuSelectedIndex == opdsLibraryIdx) {
       onOpdsBrowserOpen();
+    } else if (menuSelectedIndex == clockIdx) {
+      onClockOpen();
     } else if (menuSelectedIndex == fileTransferIdx) {
       onFileTransferOpen();
     } else if (menuSelectedIndex == hardwareTestIdx) {
@@ -236,9 +239,9 @@ void HomeActivity::render(RenderLock&&) {
 
   // Build menu items dynamically
   std::vector<const char*> menuItems = {tr(STR_LAPTOP_COMPANION), tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS),
-                                        tr(STR_FILE_TRANSFER), "Hardware Test", "Battery Drain",
+                                        "Clock", tr(STR_FILE_TRANSFER), "Hardware Test", "Battery Drain",
                                         tr(STR_SETTINGS_TITLE)};
-  std::vector<UIIcon> menuIcons = {Folder, Recent, Transfer, Wifi, Settings, Settings, Settings};
+  std::vector<UIIcon> menuIcons = {Folder, Recent, Transfer, Settings, Wifi, Settings, Settings, Settings};
 
   if (hasOpdsServers) {
     menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));
@@ -286,6 +289,8 @@ void HomeActivity::onSettingsOpen() { activityManager.goToSettings(); }
 void HomeActivity::onHardwareTestOpen() { activityManager.goToHardwareTest(); }
 
 void HomeActivity::onBatteryDrainOpen() { activityManager.goToBatteryDrain(); }
+
+void HomeActivity::onClockOpen() { activityManager.goToClock(); }
 
 void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
 

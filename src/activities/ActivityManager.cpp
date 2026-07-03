@@ -15,6 +15,7 @@
 #include "reader/ReaderActivity.h"
 #include "settings/BluetoothSettingsActivity.h"
 #include "settings/BatteryDrainActivity.h"
+#include "settings/ClockActivity.h"
 #include "settings/HardwareTestActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
@@ -184,6 +185,10 @@ void ActivityManager::goToBluetoothSettings(bool exitOnSuccessfulConnect) {
   pushActivity(std::make_unique<BluetoothSettingsActivity>(renderer, mappedInput,
                                                            [] { activityManager.popActivity(); },
                                                            exitOnSuccessfulConnect));
+}
+
+void ActivityManager::goToClock() {
+  replaceActivity(std::make_unique<ClockActivity>(renderer, mappedInput));
 }
 
 void ActivityManager::goToHardwareTest() {

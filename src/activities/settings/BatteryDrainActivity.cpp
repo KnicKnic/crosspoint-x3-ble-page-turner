@@ -1,6 +1,7 @@
 #include "BatteryDrainActivity.h"
 
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <HalGPIO.h>
 #include <HalPowerManager.h>
 #include <HalStorage.h>
@@ -141,10 +142,19 @@ bool BatteryDrainActivity::readBQ27220U16(uint8_t reg, uint16_t& value) const {
 
 std::string BatteryDrainActivity::buildBatterySnapshot(const char* phase, unsigned long elapsedMs,
                                                        esp_sleep_wakeup_cause_t cause, uint64_t gpioMask) const {
-  char line[128];
+  char line[160];
   std::string out;
-  snprintf(line, sizeof(line), "\n=== %s uptime_ms=%lu elapsed_ms=%lu wake=%s gpio_mask=0x%llX ===\n", phase, millis(),
-           elapsedMs, wakeCauseName(cause), static_cast<unsigned long long>(gpioMask));
+  char timeBuf[12] = "ERR";
+  if (!halClock.formatTime(timeBuf, sizeof(timeBuf), 48, false, true)) {
+    snprintf(timeBuf, sizeof(timeBuf), "N/A");
+  }
+  char dateBuf[11] = "ERR";
+  if (!halClock.formatDate(dateBuf, sizeof(dateBuf))) {
+    snprintf(dateBuf, sizeof(dateBuf), "N/A");
+  }
+  snprintf(line, sizeof(line),
+           "\n=== %s rtc_datetime_utc=%sT%s uptime_ms=%lu elapsed_ms=%lu wake=%s gpio_mask=0x%llX ===\n", phase,
+           dateBuf, timeBuf, millis(), elapsedMs, wakeCauseName(cause), static_cast<unsigned long long>(gpioMask));
   out += line;
 
   uint16_t temp = 0;
