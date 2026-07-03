@@ -15,10 +15,12 @@
 
 namespace {
 constexpr unsigned long COMPANION_MAINTENANCE_INTERVAL_MS = 2000;
+constexpr unsigned long COMPANION_STATE_LOG_INTERVAL_MS = 15000;
 constexpr unsigned long COMPANION_HANDSHAKE_TIMEOUT_MS = 15000;
 constexpr unsigned long COMPANION_ADVERTISING_RESTART_INTERVAL_MS = 5000;
 constexpr unsigned long COMPANION_CONN_PARAM_REQUEST_MIN_INTERVAL_MS = 2500;
-constexpr unsigned long COMPANION_COMMAND_RESPONSIVE_WINDOW_MS = 5000;
+constexpr unsigned long COMPANION_BUTTON_RESPONSIVE_WINDOW_MS = 5000;
+constexpr size_t COMPANION_STATUS_MESSAGE_MAX_LEN = 48;
 
 constexpr uint16_t BLE_CONN_INTERVAL_RESPONSIVE_MIN = 24;  // 30 ms
 constexpr uint16_t BLE_CONN_INTERVAL_RESPONSIVE_MAX = 40;  // 50 ms
@@ -29,6 +31,38 @@ constexpr uint16_t BLE_CONN_INTERVAL_IDLE_MIN = 240;       // 300 ms
 constexpr uint16_t BLE_CONN_INTERVAL_IDLE_MAX = 400;       // 500 ms
 constexpr uint16_t BLE_CONN_LATENCY_IDLE = 2;
 constexpr uint16_t BLE_CONN_TIMEOUT_IDLE = 1000;           // 10 s
+
+enum class HostStateField : uint8_t {
+  Teams,
+  Microphone,
+  Camera,
+  Message,
+};
+
+const char* hostStateFieldName(HostStateField field) {
+  switch (field) {
+    case HostStateField::Teams:
+      return "teams";
+    case HostStateField::Microphone:
+      return "microphone";
+    case HostStateField::Camera:
+      return "camera";
+    case HostStateField::Message:
+      return "message";
+  }
+  return "unknown";
+}
+
+const char* profileName(CompanionBleService::ConnectionPowerProfile profile) {
+  switch (profile) {
+    case CompanionBleService::ConnectionPowerProfile::Responsive:
+      return "responsive";
+    case CompanionBleService::ConnectionPowerProfile::Idle:
+      return "idle";
+    default:
+      return "unknown";
+  }
+}
 
 CompanionBleService* g_service = nullptr;
 
@@ -74,38 +108,60 @@ class CompanionServerCallbacks : public NimBLEServerCallbacks {
   }
 };
 
-class HostStatusCallbacks : public NimBLECharacteristicCallbacks {
+class HostStateCallbacks : public NimBLECharacteristicCallbacks {
+ public:
+  explicit HostStateCallbacks(HostStateField field) : field(field) {}
+
+ private:
   void onWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo& connInfo) override {
     const size_t len = characteristic ? characteristic->getValue().size() : 0;
-    LOG_INF("COMP", "Host status write callback address=%s handle=%u len=%u",
-            connInfo.getAddress().toString().c_str(), static_cast<unsigned>(connInfo.getConnHandle()),
-            static_cast<unsigned>(len));
-    BluetoothDiagnostics::recordf("companion_host_status_write_cb", "handle=%u len=%u",
-                                  static_cast<unsigned>(connInfo.getConnHandle()), static_cast<unsigned>(len));
-    if (g_service) {
-      g_service->onHostStatusWritten(characteristic);
+    BluetoothDiagnostics::recordf("companion_host_state_write", "field=%s handle=%u len=%u",
+                                  hostStateFieldName(field), static_cast<unsigned>(connInfo.getConnHandle()),
+                                  static_cast<unsigned>(len));
+    if (!g_service) {
+      return;
+    }
+
+    switch (field) {
+      case HostStateField::Teams:
+        g_service->onHostTeamsStateWritten(characteristic);
+        break;
+      case HostStateField::Microphone:
+        g_service->onHostMicrophoneStateWritten(characteristic);
+        break;
+      case HostStateField::Camera:
+        g_service->onHostCameraStateWritten(characteristic);
+        break;
+      case HostStateField::Message:
+        g_service->onHostStatusMessageWritten(characteristic);
+        break;
     }
   }
+
+  HostStateField field;
 };
 
-class DeviceCommandCallbacks : public NimBLECharacteristicCallbacks {
+class ButtonEventCallbacks : public NimBLECharacteristicCallbacks {
   void onSubscribe(NimBLECharacteristic* characteristic, NimBLEConnInfo& connInfo, uint16_t subValue) override {
     (void)characteristic;
-    LOG_INF("COMP", "Device command subscription changed address=%s handle=%u sub=%u",
+    LOG_INF("COMP", "Button event subscription changed address=%s handle=%u sub=%u",
             connInfo.getAddress().toString().c_str(), static_cast<unsigned>(connInfo.getConnHandle()),
             static_cast<unsigned>(subValue));
-    BluetoothDiagnostics::recordf("companion_command_subscribe", "handle=%u sub=%u",
+    BluetoothDiagnostics::recordf("companion_button_event_subscribe", "handle=%u sub=%u",
                                   static_cast<unsigned>(connInfo.getConnHandle()),
                                   static_cast<unsigned>(subValue));
     if (g_service) {
-      g_service->onDeviceCommandSubscribed(subValue != 0);
+      g_service->onButtonEventSubscribed(subValue != 0);
     }
   }
 };
 
 CompanionServerCallbacks serverCallbacks;
-HostStatusCallbacks hostStatusCallbacks;
-DeviceCommandCallbacks deviceCommandCallbacks;
+HostStateCallbacks teamsStateCallbacks(HostStateField::Teams);
+HostStateCallbacks microphoneStateCallbacks(HostStateField::Microphone);
+HostStateCallbacks cameraStateCallbacks(HostStateField::Camera);
+HostStateCallbacks statusMessageCallbacks(HostStateField::Message);
+ButtonEventCallbacks buttonEventCallbacks;
 }  // namespace
 
 CompanionBleService& CompanionBleService::getInstance() {
@@ -123,7 +179,7 @@ bool CompanionBleService::begin() {
 
   auto& btMgr = BluetoothHIDManager::getInstance();
   ownsBluetoothStack = !btMgr.isEnabled();
-  LOG_INF("COMP", "Starting companion BLE service; owns stack=%d", ownsBluetoothStack);
+  LOG_INF("COMP", "Starting companion BLE peripheral/GATT server; owns stack=%d", ownsBluetoothStack);
   if (!btMgr.enable()) {
     LOG_ERR("COMP", "Bluetooth enable failed: %s", btMgr.lastError.c_str());
     BluetoothDiagnostics::recordf("companion_ble_enable_failed", "msg=%s", btMgr.lastError.c_str());
@@ -156,15 +212,25 @@ bool CompanionBleService::begin() {
       return false;
     }
 
-    hostStatusCharacteristic = service->createCharacteristic(CompanionProtocol::HOST_STATUS_UUID,
-                                                             NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
-    deviceCommandCharacteristic = service->createCharacteristic(CompanionProtocol::DEVICE_COMMAND_UUID,
-                                                                NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-    deviceInfoCharacteristic = service->createCharacteristic(CompanionProtocol::DEVICE_INFO_UUID, NIMBLE_PROPERTY::READ);
+    constexpr uint32_t stateProperties = NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR;
+    hostTeamsStateCharacteristic =
+        service->createCharacteristic(CompanionProtocol::HOST_TEAMS_STATE_UUID, stateProperties, 1);
+    hostMicrophoneStateCharacteristic =
+        service->createCharacteristic(CompanionProtocol::HOST_MICROPHONE_STATE_UUID, stateProperties, 1);
+    hostCameraStateCharacteristic =
+        service->createCharacteristic(CompanionProtocol::HOST_CAMERA_STATE_UUID, stateProperties, 1);
+    hostStatusMessageCharacteristic = service->createCharacteristic(
+        CompanionProtocol::HOST_STATUS_MESSAGE_UUID, stateProperties, COMPANION_STATUS_MESSAGE_MAX_LEN);
+    buttonEventCharacteristic =
+        service->createCharacteristic(CompanionProtocol::BUTTON_EVENT_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY, 9);
+    deviceInfoCharacteristic =
+        service->createCharacteristic(CompanionProtocol::DEVICE_INFO_UUID, NIMBLE_PROPERTY::READ, 2);
 
-    if (!hostStatusCharacteristic || !deviceCommandCharacteristic || !deviceInfoCharacteristic) {
-      LOG_ERR("COMP", "Failed to create companion characteristics host=%p command=%p info=%p", hostStatusCharacteristic,
-              deviceCommandCharacteristic, deviceInfoCharacteristic);
+    if (!hostTeamsStateCharacteristic || !hostMicrophoneStateCharacteristic || !hostCameraStateCharacteristic ||
+        !hostStatusMessageCharacteristic || !buttonEventCharacteristic || !deviceInfoCharacteristic) {
+      LOG_ERR("COMP", "Failed to create companion characteristics teams=%p mic=%p camera=%p msg=%p button=%p info=%p",
+              hostTeamsStateCharacteristic, hostMicrophoneStateCharacteristic, hostCameraStateCharacteristic,
+              hostStatusMessageCharacteristic, buttonEventCharacteristic, deviceInfoCharacteristic);
       BluetoothDiagnostics::record("companion_characteristic_create_failed");
       if (ownsBluetoothStack) {
         btMgr.disable();
@@ -174,8 +240,11 @@ bool CompanionBleService::begin() {
       return false;
     }
 
-    hostStatusCharacteristic->setCallbacks(&hostStatusCallbacks);
-    deviceCommandCharacteristic->setCallbacks(&deviceCommandCallbacks);
+    hostTeamsStateCharacteristic->setCallbacks(&teamsStateCallbacks);
+    hostMicrophoneStateCharacteristic->setCallbacks(&microphoneStateCallbacks);
+    hostCameraStateCharacteristic->setCallbacks(&cameraStateCallbacks);
+    hostStatusMessageCharacteristic->setCallbacks(&statusMessageCallbacks);
+    buttonEventCharacteristic->setCallbacks(&buttonEventCallbacks);
     if (!server->start()) {
       LOG_ERR("COMP", "Failed to start companion GATT server");
       BluetoothDiagnostics::record("companion_gatt_start_failed");
@@ -184,14 +253,18 @@ bool CompanionBleService::begin() {
       }
       ownsBluetoothStack = false;
       server = nullptr;
-      hostStatusCharacteristic = nullptr;
-      deviceCommandCharacteristic = nullptr;
+      hostTeamsStateCharacteristic = nullptr;
+      hostMicrophoneStateCharacteristic = nullptr;
+      hostCameraStateCharacteristic = nullptr;
+      hostStatusMessageCharacteristic = nullptr;
+      buttonEventCharacteristic = nullptr;
       deviceInfoCharacteristic = nullptr;
       return false;
     }
     BluetoothDiagnostics::record("companion_gatt_started");
   }
 
+  publishHostStateValues();
   publishDeviceInfo();
 
   auto* advertising = NimBLEDevice::getAdvertising();
@@ -206,28 +279,35 @@ bool CompanionBleService::begin() {
     if (ownsBluetoothStack) {
       BluetoothHIDManager::getInstance().disable();
       server = nullptr;
-      hostStatusCharacteristic = nullptr;
-      deviceCommandCharacteristic = nullptr;
+      hostTeamsStateCharacteristic = nullptr;
+      hostMicrophoneStateCharacteristic = nullptr;
+      hostCameraStateCharacteristic = nullptr;
+      hostStatusMessageCharacteristic = nullptr;
+      buttonEventCharacteristic = nullptr;
       deviceInfoCharacteristic = nullptr;
     }
     ownsBluetoothStack = false;
     return false;
   }
-  LOG_INF("COMP", "Advertising companion service %s", CompanionProtocol::SERVICE_UUID);
+  LOG_INF("COMP", "Advertising companion service %s as peripheral", CompanionProtocol::SERVICE_UUID);
 
   running = true;
   resetSessionState();
+  publishHostStateValues();
   statusChanged = true;
   lastMaintenanceAtMs = millis();
+  lastStateLogAtMs = 0;
   lastAdvertisingRestartAtMs = 0;
   BluetoothDiagnostics::record("companion_ble_started");
-  LOG_INF("COMP", "Companion BLE service started");
+  LOG_INF("COMP", "Companion BLE GATT server started");
+  logStateSnapshot("start");
   return true;
 }
 
 void CompanionBleService::end() {
   if (!running) {
     resetSessionState();
+    publishHostStateValues();
     statusChanged = true;
     return;
   }
@@ -236,6 +316,7 @@ void CompanionBleService::end() {
   running = false;
   disconnectConnectedHosts();
   resetSessionState();
+  publishHostStateValues();
   statusChanged = true;
   BluetoothDiagnostics::record("companion_ble_stopped");
   LOG_INF("COMP", "Companion BLE service stopped; owns stack=%d", ownsBluetoothStack);
@@ -243,8 +324,11 @@ void CompanionBleService::end() {
   if (ownsBluetoothStack) {
     BluetoothHIDManager::getInstance().disable();
     server = nullptr;
-    hostStatusCharacteristic = nullptr;
-    deviceCommandCharacteristic = nullptr;
+    hostTeamsStateCharacteristic = nullptr;
+    hostMicrophoneStateCharacteristic = nullptr;
+    hostCameraStateCharacteristic = nullptr;
+    hostStatusMessageCharacteristic = nullptr;
+    buttonEventCharacteristic = nullptr;
     deviceInfoCharacteristic = nullptr;
   }
   ownsBluetoothStack = false;
@@ -282,12 +366,12 @@ void CompanionBleService::resetSessionState() {
   hostConnected = false;
   hostConnHandle = 0xFFFF;
   hostConnectedAtMs = 0;
-  hostStatusReceived = false;
-  deviceCommandSubscribed = false;
+  hostStateReceived = false;
+  buttonEventSubscribed = false;
   connectionProfile = ConnectionPowerProfile::Unknown;
   lastConnParamRequestAtMs = 0;
   responsiveUntilMs = 0;
-  commandSequence = 0;
+  buttonEventSequence = 0;
   hostStatus = HostStatus{};
 }
 
@@ -304,7 +388,7 @@ std::string CompanionBleService::getStatusText() const {
 CompanionBleService::HostStatus CompanionBleService::getHostStatus() const { return hostStatus; }
 
 bool CompanionBleService::isConnectionHandshakeActive() const {
-  return hostConnected && (!deviceCommandSubscribed || !hostStatusReceived);
+  return hostConnected && (!buttonEventSubscribed || !hostStateReceived);
 }
 
 void CompanionBleService::update() {
@@ -332,6 +416,10 @@ void CompanionBleService::update() {
     requestIdleConnectionParamsIfReady("responsive_window_elapsed");
   }
 
+  if (lastStateLogAtMs == 0 || now - lastStateLogAtMs >= COMPANION_STATE_LOG_INTERVAL_MS) {
+    logStateSnapshot("periodic");
+  }
+
   if (!hostConnected && !hasPeers) {
     auto* advertising = NimBLEDevice::getAdvertising();
     if (!advertising || !advertising->isAdvertising()) {
@@ -342,12 +430,13 @@ void CompanionBleService::update() {
 
   if (isConnectionHandshakeActive() && hostConnectedAtMs != 0 &&
       now - hostConnectedAtMs > COMPANION_HANDSHAKE_TIMEOUT_MS) {
-    LOG_INF("COMP", "Disconnecting stale companion host handshake; subscribed=%d statusReceived=%d ageMs=%lu",
-            deviceCommandSubscribed, hostStatusReceived, now - hostConnectedAtMs);
-    BluetoothDiagnostics::recordf("companion_stale_handshake_disconnect", "sub=%d status=%d ageMs=%lu",
-                                  deviceCommandSubscribed, hostStatusReceived, now - hostConnectedAtMs);
+    LOG_INF("COMP", "Disconnecting stale companion host handshake; buttonSub=%d stateReceived=%d ageMs=%lu",
+            buttonEventSubscribed, hostStateReceived, now - hostConnectedAtMs);
+    BluetoothDiagnostics::recordf("companion_stale_handshake_disconnect", "buttonSub=%d state=%d ageMs=%lu",
+                                  buttonEventSubscribed, hostStateReceived, now - hostConnectedAtMs);
     disconnectConnectedHosts();
     resetSessionState();
+    publishHostStateValues();
     statusChanged = true;
     notifyStatusChanged();
     restartAdvertising("stale_handshake");
@@ -360,14 +449,15 @@ bool CompanionBleService::consumeStatusChanged() {
   return changed;
 }
 
-bool CompanionBleService::sendToggleMute() {
-  if (!running || !hostConnected || !deviceCommandCharacteristic) {
-    LOG_INF("COMP", "Toggle mute not sent; running=%d connected=%d commandChar=%p", running, hostConnected,
-            deviceCommandCharacteristic);
+bool CompanionBleService::notifyToggleMuteReleased() {
+  if (!running || !hostConnected || !buttonEventCharacteristic || !buttonEventSubscribed) {
+    LOG_INF("COMP", "Mute button event not sent; running=%d connected=%d buttonChar=%p subscribed=%d", running,
+            hostConnected, buttonEventCharacteristic, buttonEventSubscribed);
     return false;
   }
 
-  publishDeviceCommand(static_cast<uint8_t>(CompanionProtocol::DeviceCommand::ToggleMute));
+  publishButtonEvent(static_cast<uint8_t>(CompanionProtocol::ButtonId::ToggleMute),
+                     static_cast<uint8_t>(CompanionProtocol::ButtonAction::Released));
   return true;
 }
 
@@ -386,16 +476,19 @@ void CompanionBleService::onHostConnected(uint16_t connHandle) {
   hostConnectedAtMs = millis();
   statusChanged = true;
   BluetoothDiagnostics::record("companion_host_connected");
-  LOG_INF("COMP", "Host connected to companion BLE service");
+  LOG_INF("COMP", "Host connected to companion BLE GATT server");
   requestConnectionParams(ConnectionPowerProfile::Responsive, "connect");
+  logStateSnapshot("connect");
   notifyStatusChanged();
 }
 
 void CompanionBleService::onHostDisconnected() {
   resetSessionState();
+  publishHostStateValues();
   statusChanged = true;
   BluetoothDiagnostics::record("companion_host_disconnected");
-  LOG_INF("COMP", "Host disconnected from companion BLE service");
+  LOG_INF("COMP", "Host disconnected; host state reset to defaults");
+  logStateSnapshot("disconnect");
   notifyStatusChanged();
 }
 
@@ -408,47 +501,110 @@ void CompanionBleService::onConnParamsUpdated(uint16_t interval, uint16_t latenc
   }
 }
 
-void CompanionBleService::onHostStatusWritten(NimBLECharacteristic* characteristic) {
+void CompanionBleService::onHostTeamsStateWritten(NimBLECharacteristic* characteristic) {
   if (!characteristic) {
     return;
   }
 
   const std::string value = characteristic->getValue();
-  if (value.size() < 6 || static_cast<uint8_t>(value[0]) != CompanionProtocol::PROTOCOL_VERSION ||
-      static_cast<uint8_t>(value[1]) != static_cast<uint8_t>(CompanionProtocol::MessageType::HostStatus)) {
-    BluetoothDiagnostics::record("companion_host_status_invalid");
-    LOG_INF("COMP", "Invalid host status payload len=%u", static_cast<unsigned>(value.size()));
+  if (value.empty()) {
+    LOG_INF("COMP", "Ignored empty teams state write");
     return;
   }
 
-  HostStatus next;
-  next.sequence = static_cast<uint16_t>(static_cast<uint8_t>(value[2]) |
-                                        (static_cast<uint16_t>(static_cast<uint8_t>(value[3])) << 8));
-  next.teamsDetected = value[4] != 0;
-  next.microphone = static_cast<uint8_t>(value[5]);
-  next.camera = value.size() > 6 ? static_cast<uint8_t>(value[6]) : 0;
-  if (value.size() > 7) {
-    next.message = value.substr(7, std::min<size_t>(value.size() - 7, 48));
+  const bool next = value[0] != 0;
+  const bool changed = hostStatus.teamsDetected != next;
+  const bool firstStateWrite = !hostStateReceived;
+  hostStatus.teamsDetected = next;
+  hostStateReceived = true;
+  if (changed || firstStateWrite) {
+    statusChanged = true;
+    LOG_INF("COMP", "Host teams state=%d", hostStatus.teamsDetected);
+    logStateSnapshot("teams_state");
+    notifyStatusChanged();
   }
-
-  hostStatus = next;
-  hostStatusReceived = true;
-  statusChanged = true;
-  publishAck(next.sequence, static_cast<uint8_t>(CompanionProtocol::MessageType::HostStatus));
-  LOG_INF("COMP", "Host status seq=%u teams=%d mic=%u camera=%u msg=%s", static_cast<unsigned>(next.sequence),
-          next.teamsDetected, static_cast<unsigned>(next.microphone), static_cast<unsigned>(next.camera),
-          next.message.c_str());
-  requestIdleConnectionParamsIfReady("host_status");
-  notifyStatusChanged();
+  requestIdleConnectionParamsIfReady("teams_state");
 }
 
-void CompanionBleService::onDeviceCommandSubscribed(bool subscribed) {
-  deviceCommandSubscribed = subscribed;
-  statusChanged = true;
-  if (subscribed) {
-    LOG_INF("COMP", "Companion host command notifications subscribed");
+void CompanionBleService::onHostMicrophoneStateWritten(NimBLECharacteristic* characteristic) {
+  if (!characteristic) {
+    return;
   }
+
+  const std::string value = characteristic->getValue();
+  if (value.empty()) {
+    LOG_INF("COMP", "Ignored empty microphone state write");
+    return;
+  }
+
+  const uint8_t next = static_cast<uint8_t>(value[0]);
+  const bool changed = hostStatus.microphone != next;
+  const bool firstStateWrite = !hostStateReceived;
+  hostStatus.microphone = next;
+  hostStateReceived = true;
+  if (changed || firstStateWrite) {
+    statusChanged = true;
+    LOG_INF("COMP", "Host microphone state=%u", static_cast<unsigned>(hostStatus.microphone));
+    logStateSnapshot("microphone_state");
+    notifyStatusChanged();
+  }
+  requestIdleConnectionParamsIfReady("microphone_state");
+}
+
+void CompanionBleService::onHostCameraStateWritten(NimBLECharacteristic* characteristic) {
+  if (!characteristic) {
+    return;
+  }
+
+  const std::string value = characteristic->getValue();
+  if (value.empty()) {
+    LOG_INF("COMP", "Ignored empty camera state write");
+    return;
+  }
+
+  const uint8_t next = static_cast<uint8_t>(value[0]);
+  const bool changed = hostStatus.camera != next;
+  const bool firstStateWrite = !hostStateReceived;
+  hostStatus.camera = next;
+  hostStateReceived = true;
+  if (changed || firstStateWrite) {
+    statusChanged = true;
+    LOG_INF("COMP", "Host camera state=%u", static_cast<unsigned>(hostStatus.camera));
+    logStateSnapshot("camera_state");
+    notifyStatusChanged();
+  }
+  requestIdleConnectionParamsIfReady("camera_state");
+}
+
+void CompanionBleService::onHostStatusMessageWritten(NimBLECharacteristic* characteristic) {
+  if (!characteristic) {
+    return;
+  }
+
+  std::string next = characteristic->getValue();
+  if (next.size() > COMPANION_STATUS_MESSAGE_MAX_LEN) {
+    next.resize(COMPANION_STATUS_MESSAGE_MAX_LEN);
+  }
+
+  const bool changed = hostStatus.message != next;
+  const bool firstStateWrite = !hostStateReceived;
+  hostStatus.message = next;
+  hostStateReceived = true;
+  if (changed || firstStateWrite) {
+    statusChanged = true;
+    LOG_INF("COMP", "Host message=%s", hostStatus.message.c_str());
+    logStateSnapshot("message_state");
+    notifyStatusChanged();
+  }
+  requestIdleConnectionParamsIfReady("message_state");
+}
+
+void CompanionBleService::onButtonEventSubscribed(bool subscribed) {
+  buttonEventSubscribed = subscribed;
+  statusChanged = true;
+  LOG_INF("COMP", "Companion host button notifications subscribed=%d", subscribed);
   requestIdleConnectionParamsIfReady("subscribe");
+  logStateSnapshot("button_subscribe");
   notifyStatusChanged();
 }
 
@@ -470,27 +626,25 @@ void CompanionBleService::requestConnectionParams(ConnectionPowerProfile profile
   uint16_t maxInterval = BLE_CONN_INTERVAL_IDLE_MAX;
   uint16_t latency = BLE_CONN_LATENCY_IDLE;
   uint16_t timeout = BLE_CONN_TIMEOUT_IDLE;
-  const char* profileName = "idle";
   if (profile == ConnectionPowerProfile::Responsive) {
     minInterval = BLE_CONN_INTERVAL_RESPONSIVE_MIN;
     maxInterval = BLE_CONN_INTERVAL_RESPONSIVE_MAX;
     latency = BLE_CONN_LATENCY_RESPONSIVE;
     timeout = BLE_CONN_TIMEOUT_RESPONSIVE;
-    profileName = "responsive";
   }
 
   lastConnParamRequestAtMs = now;
   connectionProfile = profile;
   server->updateConnParams(hostConnHandle, minInterval, maxInterval, latency, timeout);
-  LOG_INF("COMP", "Requested %s connection params reason=%s min=%u max=%u latency=%u timeout=%u", profileName,
+  LOG_INF("COMP", "Requested %s connection params reason=%s min=%u max=%u latency=%u timeout=%u", profileName(profile),
           reason ? reason : "", static_cast<unsigned>(minInterval), static_cast<unsigned>(maxInterval),
           static_cast<unsigned>(latency), static_cast<unsigned>(timeout));
-  BluetoothDiagnostics::recordf("companion_conn_params_requested", "profile=%s reason=%s", profileName,
+  BluetoothDiagnostics::recordf("companion_conn_params_requested", "profile=%s reason=%s", profileName(profile),
                                 reason ? reason : "");
 }
 
 void CompanionBleService::requestIdleConnectionParamsIfReady(const char* reason) {
-  if (!hostConnected || !hostStatusReceived || !deviceCommandSubscribed) {
+  if (!hostConnected || !hostStateReceived || !buttonEventSubscribed) {
     return;
   }
   if (responsiveUntilMs != 0) {
@@ -527,6 +681,22 @@ bool CompanionBleService::restartAdvertising(const char* reason) {
   return ok;
 }
 
+void CompanionBleService::publishHostStateValues() {
+  const uint8_t teams = hostStatus.teamsDetected ? 1 : 0;
+  if (hostTeamsStateCharacteristic) {
+    hostTeamsStateCharacteristic->setValue(&teams, sizeof(teams));
+  }
+  if (hostMicrophoneStateCharacteristic) {
+    hostMicrophoneStateCharacteristic->setValue(&hostStatus.microphone, sizeof(hostStatus.microphone));
+  }
+  if (hostCameraStateCharacteristic) {
+    hostCameraStateCharacteristic->setValue(&hostStatus.camera, sizeof(hostStatus.camera));
+  }
+  if (hostStatusMessageCharacteristic) {
+    hostStatusMessageCharacteristic->setValue(hostStatus.message);
+  }
+}
+
 void CompanionBleService::notifyStatusChanged() {
   if (statusChangedCallback) {
     statusChangedCallback();
@@ -540,49 +710,46 @@ void CompanionBleService::publishDeviceInfo() {
 
   uint8_t payload[] = {
       CompanionProtocol::PROTOCOL_VERSION,
-      0x01,
+      0x02,
   };
   deviceInfoCharacteristic->setValue(payload, sizeof(payload));
 }
 
-void CompanionBleService::publishAck(uint16_t sequence, uint8_t ackedMessageType) {
-  if (!deviceCommandCharacteristic || !deviceCommandSubscribed) {
-    LOG_INF("COMP", "Ack not sent; commandChar=%p subscribed=%d seq=%u type=%u", deviceCommandCharacteristic,
-            deviceCommandSubscribed, static_cast<unsigned>(sequence), static_cast<unsigned>(ackedMessageType));
+void CompanionBleService::publishButtonEvent(uint8_t buttonId, uint8_t action) {
+  if (!buttonEventCharacteristic) {
     return;
   }
 
+  responsiveUntilMs = millis() + COMPANION_BUTTON_RESPONSIVE_WINDOW_MS;
+  requestConnectionParams(ConnectionPowerProfile::Responsive, "button_event");
+
+  buttonEventSequence++;
+  const uint32_t uptimeMs = millis();
   uint8_t payload[] = {
       CompanionProtocol::PROTOCOL_VERSION,
-      static_cast<uint8_t>(CompanionProtocol::MessageType::Ack),
-      static_cast<uint8_t>(sequence & 0xFF),
-      static_cast<uint8_t>((sequence >> 8) & 0xFF),
-      ackedMessageType,
+      buttonId,
+      action,
+      static_cast<uint8_t>(buttonEventSequence & 0xFF),
+      static_cast<uint8_t>((buttonEventSequence >> 8) & 0xFF),
+      static_cast<uint8_t>(uptimeMs & 0xFF),
+      static_cast<uint8_t>((uptimeMs >> 8) & 0xFF),
+      static_cast<uint8_t>((uptimeMs >> 16) & 0xFF),
+      static_cast<uint8_t>((uptimeMs >> 24) & 0xFF),
   };
-  deviceCommandCharacteristic->setValue(payload, sizeof(payload));
-  deviceCommandCharacteristic->notify();
-  LOG_INF("COMP", "Ack notified seq=%u type=%u", static_cast<unsigned>(sequence),
-          static_cast<unsigned>(ackedMessageType));
+  buttonEventCharacteristic->setValue(payload, sizeof(payload));
+  buttonEventCharacteristic->notify();
+  LOG_INF("COMP", "Button event notified seq=%u button=%u action=%u uptimeMs=%lu",
+          static_cast<unsigned>(buttonEventSequence), static_cast<unsigned>(buttonId), static_cast<unsigned>(action),
+          static_cast<unsigned long>(uptimeMs));
+  BluetoothDiagnostics::recordf("companion_button_event_notify", "seq=%u button=%u action=%u",
+                                static_cast<unsigned>(buttonEventSequence), static_cast<unsigned>(buttonId),
+                                static_cast<unsigned>(action));
 }
 
-void CompanionBleService::publishDeviceCommand(uint8_t command) {
-  if (!deviceCommandCharacteristic) {
-    return;
-  }
-
-  responsiveUntilMs = millis() + COMPANION_COMMAND_RESPONSIVE_WINDOW_MS;
-  requestConnectionParams(ConnectionPowerProfile::Responsive, "device_command");
-
-  commandSequence++;
-  uint8_t payload[] = {
-      CompanionProtocol::PROTOCOL_VERSION,
-      static_cast<uint8_t>(CompanionProtocol::MessageType::DeviceCommand),
-      static_cast<uint8_t>(commandSequence & 0xFF),
-      static_cast<uint8_t>((commandSequence >> 8) & 0xFF),
-      command,
-  };
-  deviceCommandCharacteristic->setValue(payload, sizeof(payload));
-  deviceCommandCharacteristic->notify();
-  LOG_INF("COMP", "Device command notified seq=%u command=%u", static_cast<unsigned>(commandSequence),
-          static_cast<unsigned>(command));
+void CompanionBleService::logStateSnapshot(const char* reason) {
+  lastStateLogAtMs = millis();
+  LOG_INF("COMP", "State reason=%s running=%d connected=%d buttonSub=%d stateRx=%d profile=%s teams=%d mic=%u cam=%u heap=%u",
+          reason ? reason : "", running, hostConnected, buttonEventSubscribed, hostStateReceived,
+          profileName(connectionProfile), hostStatus.teamsDetected, static_cast<unsigned>(hostStatus.microphone),
+          static_cast<unsigned>(hostStatus.camera), static_cast<unsigned>(ESP.getFreeHeap()));
 }

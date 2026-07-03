@@ -70,7 +70,7 @@ void LaptopCompanionActivity::loop() {
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    statusMessage = service.sendToggleMute() ? "Mute toggle sent" : "Host not connected";
+    statusMessage = service.notifyToggleMuteReleased() ? "Mute button sent" : "Host not connected";
     requestUpdate();
   }
 }

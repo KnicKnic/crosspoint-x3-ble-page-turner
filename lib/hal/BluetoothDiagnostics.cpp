@@ -1,7 +1,6 @@
 #include "BluetoothDiagnostics.h"
 
 #include <Arduino.h>
-#include <HalStorage.h>
 #include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -11,13 +10,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <vector>
 
 namespace {
 
-constexpr char DIAG_DIR[] = "/.crosspoint";
-constexpr char DIAG_FILE[] = "/.crosspoint/ble_diag.log";
-constexpr char BOOT_FILE[] = "/.crosspoint/ble_boot_count.txt";
 constexpr size_t MAX_ENTRIES = 32;
 constexpr size_t MAX_LINE_LENGTH = 176;
 constexpr size_t MAX_DETAIL_LENGTH = 96;
@@ -27,7 +22,6 @@ size_t head = 0;
 size_t count = 0;
 uint32_t bootCount = 0;
 bool dirty = false;
-bool loadedPersisted = false;
 uint8_t storageFlushSuppressDepth = 0;
 SemaphoreHandle_t mutex = nullptr;
 
@@ -113,72 +107,12 @@ std::string snapshotLocked() {
   return output;
 }
 
-void loadPersistedLocked() {
-  if (loadedPersisted) {
-    return;
-  }
-  loadedPersisted = true;
-
-  if (!Storage.ready() || !Storage.exists(DIAG_FILE)) {
-    return;
-  }
-
-  const String content = Storage.readFile(DIAG_FILE);
-  std::vector<std::string> lines;
-  size_t start = 0;
-  const char* text = content.c_str();
-  const size_t length = content.length();
-  while (start < length) {
-    size_t end = start;
-    while (end < length && text[end] != '\n' && text[end] != '\r') {
-      end++;
-    }
-    if (end > start) {
-      lines.emplace_back(text + start, end - start);
-    }
-    while (end < length && (text[end] == '\n' || text[end] == '\r')) {
-      end++;
-    }
-    start = end;
-  }
-
-  const size_t first = lines.size() > MAX_ENTRIES ? lines.size() - MAX_ENTRIES : 0;
-  head = 0;
-  count = 0;
-  for (size_t i = first; i < lines.size(); i++) {
-    const size_t index = count % MAX_ENTRIES;
-    strncpy(entries[index], lines[i].c_str(), MAX_LINE_LENGTH - 1);
-    entries[index][MAX_LINE_LENGTH - 1] = '\0';
-    count++;
-  }
-  if (count > MAX_ENTRIES) {
-    count = MAX_ENTRIES;
-  }
-  dirty = false;
-}
-
 }  // namespace
 
 namespace BluetoothDiagnostics {
 
 void recordBoot() {
-  if (Storage.ready()) {
-    Storage.mkdir(DIAG_DIR);
-    const String previous = Storage.readFile(BOOT_FILE);
-    bootCount = strtoul(previous.c_str(), nullptr, 10) + 1;
-
-    char buffer[16];
-    snprintf(buffer, sizeof(buffer), "%lu", static_cast<unsigned long>(bootCount));
-    Storage.writeFile(BOOT_FILE, String(buffer));
-
-    if (takeMutex(pdMS_TO_TICKS(50))) {
-      loadPersistedLocked();
-      giveMutex();
-    }
-  } else {
-    bootCount++;
-  }
-
+  bootCount++;
   const auto reason = esp_reset_reason();
   recordf("boot", "count=%lu reset=%s(%d)", static_cast<unsigned long>(bootCount), resetReasonName(reason),
           static_cast<int>(reason));
@@ -226,30 +160,10 @@ void setStorageFlushSuppressed(bool suppressed) {
 }
 
 void flushToStorage(bool force) {
-  if (!force && !dirty) {
-    return;
-  }
-  if (!Storage.ready()) {
-    return;
-  }
-  if (!force) {
-    if (!takeMutex()) {
-      return;
-    }
-    const bool suppressed = storageFlushSuppressDepth > 0;
+  (void)force;
+  if (takeMutex()) {
+    dirty = false;
     giveMutex();
-    if (suppressed) {
-      return;
-    }
-  }
-
-  const std::string content = snapshot();
-  Storage.mkdir(DIAG_DIR);
-  if (Storage.writeFile(DIAG_FILE, String(content.c_str()))) {
-    if (takeMutex()) {
-      dirty = false;
-      giveMutex();
-    }
   }
 }
 
@@ -263,12 +177,7 @@ std::string snapshot() {
 }
 
 std::string persistedSnapshot() {
-  if (!Storage.ready() || !Storage.exists(DIAG_FILE)) {
-    return snapshot();
-  }
-
-  const String content = Storage.readFile(DIAG_FILE);
-  return std::string(content.c_str());
+  return snapshot();
 }
 
 }  // namespace BluetoothDiagnostics

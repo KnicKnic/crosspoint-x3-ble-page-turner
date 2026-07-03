@@ -19,18 +19,20 @@ namespace X3LaptopCompanion
         private BluetoothLEDevice companionDevice;
         private GattSession gattSession;
         private GattDeviceService companionService;
-        private GattCharacteristic hostStatusCharacteristic;
-        private GattCharacteristic deviceCommandCharacteristic;
+        private GattCharacteristic hostTeamsStateCharacteristic;
+        private GattCharacteristic hostMicrophoneStateCharacteristic;
+        private GattCharacteristic hostCameraStateCharacteristic;
+        private GattCharacteristic hostStatusMessageCharacteristic;
+        private GattCharacteristic buttonEventCharacteristic;
         private GattCharacteristic deviceInfoCharacteristic;
-        private readonly SemaphoreSlim hostStatusWriteLock = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim hostStateWriteLock = new SemaphoreSlim(1, 1);
         private Timer scanWatchdogTimer;
-        private ushort hostStatusSequence;
         private int connecting;
         private bool intentionallyPausedAdvertisementWatcher;
         private bool disposed;
 
         public event EventHandler<CompanionConnectionStatus> StatusChanged;
-        public event EventHandler<CompanionDeviceCommand> DeviceCommandReceived;
+        public event EventHandler<CompanionButtonEvent> ButtonEventReceived;
 
         public void Start()
         {
@@ -108,63 +110,84 @@ namespace X3LaptopCompanion
 
         public async Task SendHostStatusAsync(bool teamsDetected, CompanionTriState microphone, CompanionTriState camera, string message)
         {
-            if (!await hostStatusWriteLock.WaitAsync(0))
+            if (!await hostStateWriteLock.WaitAsync(0))
             {
-                HostLog.Write("Host status skipped; previous BLE write is still pending.");
+                HostLog.Write("Host state skipped; previous BLE write is still pending.");
                 return;
             }
 
             try
             {
-                if (hostStatusCharacteristic == null)
+                if (hostTeamsStateCharacteristic == null || hostMicrophoneStateCharacteristic == null ||
+                    hostCameraStateCharacteristic == null || hostStatusMessageCharacteristic == null)
                 {
-                    HostLog.Write("Host status skipped; host status characteristic is not available.");
+                    HostLog.Write("Host state skipped; one or more state characteristics are not available.");
                     return;
                 }
 
-                var writer = new DataWriter
-                {
-                    ByteOrder = ByteOrder.LittleEndian
-                };
-                writer.WriteByte(CompanionProtocol.ProtocolVersion);
-                writer.WriteByte((byte)CompanionMessageType.HostStatus);
-                var sequence = hostStatusSequence++;
-                writer.WriteUInt16(sequence);
-                writer.WriteByte(teamsDetected ? (byte)1 : (byte)0);
-                writer.WriteByte((byte)microphone);
-                writer.WriteByte((byte)camera);
-                if (!string.IsNullOrWhiteSpace(message))
-                {
-                    writer.WriteString(message.Length > 48 ? message.Substring(0, 48) : message);
-                }
-
-                var buffer = writer.DetachBuffer();
                 var startedAt = DateTimeOffset.Now;
-                HostLog.Write("Host status write starting seq=" + sequence + " bytes=" + buffer.Length +
-                    " option=WriteWithResponse properties=" + hostStatusCharacteristic.CharacteristicProperties);
-                var status = await hostStatusCharacteristic.WriteValueAsync(buffer, GattWriteOption.WriteWithResponse);
+                HostLog.Write("Host state write starting option=WriteWithoutResponse teams=" + teamsDetected +
+                    " mic=" + microphone + " camera=" + camera + " message=" + message);
+                var teamsStatus = await WriteByteStateAsync(hostTeamsStateCharacteristic, teamsDetected ? (byte)1 : (byte)0, "teams");
+                var microphoneStatus = await WriteByteStateAsync(hostMicrophoneStateCharacteristic, (byte)microphone, "microphone");
+                var cameraStatus = await WriteByteStateAsync(hostCameraStateCharacteristic, (byte)camera, "camera");
+                var messageStatus = await WriteStringStateAsync(hostStatusMessageCharacteristic, message, "message");
                 var elapsedMs = (DateTimeOffset.Now - startedAt).TotalMilliseconds;
-                HostLog.Write("Host status write seq=" + sequence + " status=" + status + " teams=" + teamsDetected +
-                    " mic=" + microphone + " camera=" + camera + " elapsedMs=" + elapsedMs.ToString("F0") +
-                    " message=" + message);
-                if (status != GattCommunicationStatus.Success)
+                HostLog.Write("Host state write complete teamsStatus=" + teamsStatus + " micStatus=" + microphoneStatus +
+                    " cameraStatus=" + cameraStatus + " messageStatus=" + messageStatus +
+                    " elapsedMs=" + elapsedMs.ToString("F0"));
+                if (teamsStatus != GattCommunicationStatus.Success ||
+                    microphoneStatus != GattCommunicationStatus.Success ||
+                    cameraStatus != GattCommunicationStatus.Success ||
+                    messageStatus != GattCommunicationStatus.Success)
                 {
                     ResetGattState();
                     RestartAdvertisementWatcherIfNeeded();
-                    PublishStatus(false, "Host status write failed: " + status);
+                    PublishStatus(false, "Host state write failed.");
                 }
             }
             catch (Exception ex)
             {
-                HostLog.Write("Host status write failed with exception.", ex);
+                HostLog.Write("Host state write failed with exception.", ex);
                 ResetGattState();
                 RestartAdvertisementWatcherIfNeeded();
-                PublishStatus(false, "Host status write exception: " + ex.Message);
+                PublishStatus(false, "Host state write exception: " + ex.Message);
             }
             finally
             {
-                hostStatusWriteLock.Release();
+                hostStateWriteLock.Release();
             }
+        }
+
+        private static async Task<GattCommunicationStatus> WriteByteStateAsync(GattCharacteristic characteristic, byte value, string name)
+        {
+            var writer = new DataWriter
+            {
+                ByteOrder = ByteOrder.LittleEndian
+            };
+            writer.WriteByte(value);
+            var buffer = writer.DetachBuffer();
+            HostLog.Write("Host state write " + name + " bytes=" + buffer.Length +
+                " properties=" + characteristic.CharacteristicProperties);
+            var status = await characteristic.WriteValueAsync(buffer, GattWriteOption.WriteWithoutResponse);
+            HostLog.Write("Host state write " + name + " status=" + status + " value=" + value);
+            return status;
+        }
+
+        private static async Task<GattCommunicationStatus> WriteStringStateAsync(GattCharacteristic characteristic, string value, string name)
+        {
+            var writer = new DataWriter
+            {
+                ByteOrder = ByteOrder.LittleEndian
+            };
+            var message = string.IsNullOrWhiteSpace(value) ? string.Empty : value;
+            writer.WriteString(message.Length > 48 ? message.Substring(0, 48) : message);
+            var buffer = writer.DetachBuffer();
+            HostLog.Write("Host state write " + name + " bytes=" + buffer.Length +
+                " properties=" + characteristic.CharacteristicProperties + " value=" + message);
+            var status = await characteristic.WriteValueAsync(buffer, GattWriteOption.WriteWithoutResponse);
+            HostLog.Write("Host state write " + name + " status=" + status);
+            return status;
         }
 
         private async void OnDeviceAdded(DeviceWatcher sender, DeviceInformation args)
@@ -453,42 +476,53 @@ namespace X3LaptopCompanion
 
         private async Task UseGattServiceAsync(GattDeviceService service)
         {
-            if (deviceCommandCharacteristic != null)
+            if (buttonEventCharacteristic != null)
             {
-                deviceCommandCharacteristic.ValueChanged -= OnDeviceCommandValueChanged;
-                deviceCommandCharacteristic = null;
+                buttonEventCharacteristic.ValueChanged -= OnButtonEventValueChanged;
+                buttonEventCharacteristic = null;
             }
 
             companionService?.Dispose();
             companionService = service;
             HostLog.Write("GATT service opened. Uuid=" + service.Uuid);
 
-            hostStatusCharacteristic = await GetCharacteristicAsync(service, CompanionProtocol.HostStatusUuid, "host status");
-            deviceCommandCharacteristic = await GetCharacteristicAsync(service, CompanionProtocol.DeviceCommandUuid, "device command");
+            hostTeamsStateCharacteristic = await GetCharacteristicAsync(service, CompanionProtocol.HostTeamsStateUuid, "host teams state");
+            hostMicrophoneStateCharacteristic = await GetCharacteristicAsync(service, CompanionProtocol.HostMicrophoneStateUuid, "host microphone state");
+            hostCameraStateCharacteristic = await GetCharacteristicAsync(service, CompanionProtocol.HostCameraStateUuid, "host camera state");
+            hostStatusMessageCharacteristic = await GetCharacteristicAsync(service, CompanionProtocol.HostStatusMessageUuid, "host status message");
+            buttonEventCharacteristic = await GetCharacteristicAsync(service, CompanionProtocol.ButtonEventUuid, "button event");
             deviceInfoCharacteristic = await GetCharacteristicAsync(service, CompanionProtocol.DeviceInfoUuid, "device info");
 
-            if (hostStatusCharacteristic == null || deviceCommandCharacteristic == null)
+            if (hostTeamsStateCharacteristic == null || hostMicrophoneStateCharacteristic == null ||
+                hostCameraStateCharacteristic == null || hostStatusMessageCharacteristic == null ||
+                buttonEventCharacteristic == null)
             {
-                HostLog.Write("Required characteristic missing. hostStatus=" + (hostStatusCharacteristic != null) +
-                    " deviceCommand=" + (deviceCommandCharacteristic != null) + " deviceInfo=" +
-                    (deviceInfoCharacteristic != null));
+                HostLog.Write("Required characteristic missing. teams=" + (hostTeamsStateCharacteristic != null) +
+                    " microphone=" + (hostMicrophoneStateCharacteristic != null) +
+                    " camera=" + (hostCameraStateCharacteristic != null) +
+                    " message=" + (hostStatusMessageCharacteristic != null) +
+                    " button=" + (buttonEventCharacteristic != null) +
+                    " deviceInfo=" + (deviceInfoCharacteristic != null));
                 PublishStatus(false, "X3 companion service is missing required characteristics.");
                 ResetGattState();
                 RestartAdvertisementWatcherIfNeeded();
                 return;
             }
 
-            HostLog.Write("Characteristic properties. hostStatus=" + hostStatusCharacteristic.CharacteristicProperties +
-                " deviceCommand=" + deviceCommandCharacteristic.CharacteristicProperties + " deviceInfo=" +
+            HostLog.Write("Characteristic properties. teams=" + hostTeamsStateCharacteristic.CharacteristicProperties +
+                " microphone=" + hostMicrophoneStateCharacteristic.CharacteristicProperties +
+                " camera=" + hostCameraStateCharacteristic.CharacteristicProperties +
+                " message=" + hostStatusMessageCharacteristic.CharacteristicProperties +
+                " button=" + buttonEventCharacteristic.CharacteristicProperties + " deviceInfo=" +
                 (deviceInfoCharacteristic == null ? "missing" : deviceInfoCharacteristic.CharacteristicProperties.ToString()));
 
-            deviceCommandCharacteristic.ValueChanged += OnDeviceCommandValueChanged;
-            var status = await deviceCommandCharacteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
+            buttonEventCharacteristic.ValueChanged += OnButtonEventValueChanged;
+            var status = await buttonEventCharacteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
                 GattClientCharacteristicConfigurationDescriptorValue.Notify);
-            HostLog.Write("Device command notification subscribe status=" + status);
+            HostLog.Write("Button event notification subscribe status=" + status);
             if (status != GattCommunicationStatus.Success)
             {
-                PublishStatus(false, "Could not subscribe to X3 command notifications.");
+                PublishStatus(false, "Could not subscribe to X3 button notifications.");
                 ResetGattState();
                 RestartAdvertisementWatcherIfNeeded();
                 return;
@@ -544,14 +578,17 @@ namespace X3LaptopCompanion
 
         private void ResetGattState()
         {
-            if (deviceCommandCharacteristic != null)
+            if (buttonEventCharacteristic != null)
             {
-                deviceCommandCharacteristic.ValueChanged -= OnDeviceCommandValueChanged;
-                deviceCommandCharacteristic = null;
+                buttonEventCharacteristic.ValueChanged -= OnButtonEventValueChanged;
+                buttonEventCharacteristic = null;
             }
 
             deviceInfoCharacteristic = null;
-            hostStatusCharacteristic = null;
+            hostTeamsStateCharacteristic = null;
+            hostMicrophoneStateCharacteristic = null;
+            hostCameraStateCharacteristic = null;
+            hostStatusMessageCharacteristic = null;
             companionService?.Dispose();
             companionService = null;
             if (gattSession != null)
@@ -640,43 +677,40 @@ namespace X3LaptopCompanion
                 address & 0xFF);
         }
 
-        private void OnDeviceCommandValueChanged(GattCharacteristic sender, GattValueChangedEventArgs args)
+        private void OnButtonEventValueChanged(GattCharacteristic sender, GattValueChangedEventArgs args)
         {
             var reader = DataReader.FromBuffer(args.CharacteristicValue);
             reader.ByteOrder = ByteOrder.LittleEndian;
-            if (reader.UnconsumedBufferLength < 5)
+            if (reader.UnconsumedBufferLength < 9)
             {
-                HostLog.Write("Device command notification ignored; payload too short.");
+                HostLog.Write("Button event notification ignored; payload too short.");
                 return;
             }
 
             var version = reader.ReadByte();
-            var messageType = reader.ReadByte();
+            var button = reader.ReadByte();
+            var action = reader.ReadByte();
             var sequence = reader.ReadUInt16();
-            var payload = reader.ReadByte();
+            var uptimeMs = reader.ReadUInt32();
 
             if (version != CompanionProtocol.ProtocolVersion)
             {
-                HostLog.Write("Device notification ignored. version=" + version +
-                    " messageType=" + messageType + " payload=" + payload);
+                HostLog.Write("Button event ignored. version=" + version +
+                    " button=" + button + " action=" + action + " seq=" + sequence);
                 return;
             }
 
-            if (messageType == (byte)CompanionMessageType.Ack)
+            if (button != (byte)CompanionButton.ToggleMute || action != (byte)CompanionButtonAction.Released)
             {
-                HostLog.Write("Device ack received. seq=" + sequence + " ackedMessageType=" + payload);
+                HostLog.Write("Button event ignored. button=" + button + " action=" + action +
+                    " seq=" + sequence + " uptimeMs=" + uptimeMs);
                 return;
             }
 
-            if (messageType == (byte)CompanionMessageType.DeviceCommand)
-            {
-                HostLog.Write("Device command received. seq=" + sequence + " command=" + payload);
-                DeviceCommandReceived?.Invoke(this, (CompanionDeviceCommand)payload);
-                return;
-            }
-
-            HostLog.Write("Device notification ignored. version=" + version +
-                " messageType=" + messageType + " payload=" + payload);
+            HostLog.Write("Button event received. seq=" + sequence + " button=" + button +
+                " action=" + action + " uptimeMs=" + uptimeMs + " hostReceivedAt=" + DateTimeOffset.Now);
+            ButtonEventReceived?.Invoke(this, new CompanionButtonEvent((CompanionButton)button,
+                (CompanionButtonAction)action, sequence, uptimeMs));
         }
 
         private void PublishStatus(bool connected, string message)
@@ -687,7 +721,12 @@ namespace X3LaptopCompanion
 
         private bool IsConnected()
         {
-            return companionService != null && hostStatusCharacteristic != null && deviceCommandCharacteristic != null;
+            return companionService != null &&
+                hostTeamsStateCharacteristic != null &&
+                hostMicrophoneStateCharacteristic != null &&
+                hostCameraStateCharacteristic != null &&
+                hostStatusMessageCharacteristic != null &&
+                buttonEventCharacteristic != null;
         }
     }
 }

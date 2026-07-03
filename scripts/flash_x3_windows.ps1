@@ -45,18 +45,35 @@ function Find-Esptool {
     throw "esptool not found. Build once with PlatformIO or install PlatformIO first."
 }
 
-function Find-PlatformIO {
-    $penvPio = Join-Path $env:USERPROFILE ".platformio\penv\Scripts\pio.exe"
-    if (Test-Path $penvPio) {
-        return $penvPio
+function Find-Python {
+    $commands = @("python.exe", "python3.exe")
+    foreach ($command in $commands) {
+        $fromPath = Get-Command $command -ErrorAction SilentlyContinue
+        if ($fromPath) {
+            return [pscustomobject]@{
+                Exe = $fromPath.Source
+                Args = @()
+            }
+        }
     }
 
-    $fromPath = Get-Command pio -ErrorAction SilentlyContinue
-    if ($fromPath) {
-        return $fromPath.Source
+    $pyLauncher = Get-Command py.exe -ErrorAction SilentlyContinue
+    if ($pyLauncher) {
+        return [pscustomobject]@{
+            Exe = $pyLauncher.Source
+            Args = @("-3")
+        }
     }
 
-    throw "pio not found. Install PlatformIO first."
+    $penvPython = Join-Path $env:USERPROFILE ".platformio\penv\Scripts\python.exe"
+    if (Test-Path $penvPython) {
+        return [pscustomobject]@{
+            Exe = $penvPython
+            Args = @()
+        }
+    }
+
+    throw "python not found. Install Python 3 first."
 }
 
 function Find-X3Port {
@@ -125,14 +142,22 @@ if (-not $SkipVerify) {
     & $esptool --chip esp32c3 -p $Port verify-flash $app1Offset $firmwarePath
 }
 
+clear-Host
 Write-Host ""
 Write-Host "Flashed X3 firmware to app0 and app1 successfully."
 [console]::Beep()
 
 if ($Monitor) {
-    $pio = Find-PlatformIO
+    $python = Find-Python
+    $monitorScript = Join-Path $PSScriptRoot "debugging_monitor.py"
+    $pythonArgs = @()
+    if ($python.Args) {
+        $pythonArgs += $python.Args
+    }
+    $monitorArgs = @($monitorScript, $Port, "--baud", $MonitorBaud)
+
     Write-Host ""
-    Write-Host "Opening serial monitor on $Port at $MonitorBaud baud with $pio..."
-    Write-Host "Press Ctrl+C to close the monitor."
-    & $pio device monitor -p $Port -b $MonitorBaud
+    Write-Host "Opening debugging monitor on $Port at $MonitorBaud baud with $($python.Exe)..."
+    Write-Host "Press Ctrl+C or close the graph window to close the monitor."
+    & $python.Exe @pythonArgs @monitorArgs
 }

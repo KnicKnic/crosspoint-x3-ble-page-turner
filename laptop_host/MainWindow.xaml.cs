@@ -26,6 +26,8 @@ namespace X3LaptopCompanion
         private string testCameraToggleText = "Unknown";
         private bool isTeamsDryRun;
         private string teamsModeText = "Live Teams";
+        private ushort? lastToggleMuteButtonSequence;
+        private ushort simulatedButtonSequence = 0xFF00;
         private string detailText =
             "Open Laptop Companion on the X3 Home screen, then pair/connect over BLE once the firmware service is wired in.";
 
@@ -35,7 +37,7 @@ namespace X3LaptopCompanion
             DataContext = this;
             HostLog.Write("Main window created.");
             connectionService.StatusChanged += OnConnectionStatusChanged;
-            connectionService.DeviceCommandReceived += OnDeviceCommandReceived;
+            connectionService.ButtonEventReceived += OnButtonEventReceived;
             statusTimer.Interval = System.TimeSpan.FromSeconds(2);
             statusTimer.Tick += OnStatusTimerTick;
             Loaded += OnLoaded;
@@ -193,7 +195,9 @@ namespace X3LaptopCompanion
                 return;
             }
 
-            OnDeviceCommandReceived(this, CompanionDeviceCommand.ToggleMute);
+            simulatedButtonSequence++;
+            OnButtonEventReceived(this, new CompanionButtonEvent(CompanionButton.ToggleMute,
+                CompanionButtonAction.Released, simulatedButtonSequence, 0));
         }
 
         public void SendTestStatus()
@@ -257,6 +261,11 @@ namespace X3LaptopCompanion
             SendTestStatus();
         }
 
+        private void OpenLog_Click(object sender, RoutedEventArgs e)
+        {
+            OpenLog();
+        }
+
         private void CycleTestMicrophone_Click(object sender, RoutedEventArgs e)
         {
             testMicrophone = NextTriState(testMicrophone);
@@ -269,11 +278,6 @@ namespace X3LaptopCompanion
             testCamera = NextTriState(testCamera);
             TestCameraToggleText = TriStateText(testCamera, "Off", "Active");
             OnTestStatusChanged("camera");
-        }
-
-        private void OpenLog_Click(object sender, RoutedEventArgs e)
-        {
-            OpenLog();
         }
 
         private void Hide_Click(object sender, RoutedEventArgs e)
@@ -328,6 +332,7 @@ namespace X3LaptopCompanion
                 HostLog.Write("UI status received. connected=" + status.IsConnected + " message=" + status.Message);
                 ConnectionText = status.IsConnected ? "Connected" : "Disconnected";
                 DetailText = status.Message;
+                lastToggleMuteButtonSequence = null;
                 if (status.IsConnected)
                 {
                     SendCurrentHostStatus();
@@ -335,14 +340,25 @@ namespace X3LaptopCompanion
             });
         }
 
-        private void OnDeviceCommandReceived(object sender, CompanionDeviceCommand command)
+        private void OnButtonEventReceived(object sender, CompanionButtonEvent buttonEvent)
         {
-            HostLog.Write("UI device command received. command=" + command);
-            if (command != CompanionDeviceCommand.ToggleMute)
+            HostLog.Write("UI button event received. button=" + buttonEvent.Button +
+                " action=" + buttonEvent.Action + " seq=" + buttonEvent.Sequence +
+                " deviceUptimeMs=" + buttonEvent.DeviceUptimeMs);
+            if (buttonEvent.Button != CompanionButton.ToggleMute ||
+                buttonEvent.Action != CompanionButtonAction.Released)
             {
                 return;
             }
 
+            if (lastToggleMuteButtonSequence.HasValue &&
+                lastToggleMuteButtonSequence.Value == buttonEvent.Sequence)
+            {
+                HostLog.Write("Duplicate toggle mute button event ignored. seq=" + buttonEvent.Sequence);
+                return;
+            }
+
+            lastToggleMuteButtonSequence = buttonEvent.Sequence;
             Dispatcher.Invoke(ToggleMuteFromUi);
         }
 
