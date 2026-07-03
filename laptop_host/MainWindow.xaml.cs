@@ -459,6 +459,12 @@ namespace X3LaptopCompanion
         private void QueueHostStatusIfChanged(bool teamsDetected, CompanionTriState microphone, CompanionTriState camera,
             string message, string reason, bool force = false)
         {
+            if (!wasBleConnected)
+            {
+                HostLog.Write("Host state write skipped while BLE is disconnected. reason=" + reason);
+                return;
+            }
+
             var payload = new HostStatePayload(teamsDetected, microphone, camera, message);
             if (!force && payload.SameAs(lastSentHostState))
             {

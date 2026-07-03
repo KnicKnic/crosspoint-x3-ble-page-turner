@@ -142,7 +142,7 @@ namespace X3LaptopCompanion
                     messageStatus != GattCommunicationStatus.Success)
                 {
                     ResetGattState();
-                    RestartAdvertisementWatcherIfNeeded();
+                    RestartAdvertisementWatcherIfNeeded("host state write failed");
                     PublishStatus(false, "Host state write failed.");
                     return false;
                 }
@@ -153,7 +153,7 @@ namespace X3LaptopCompanion
             {
                 HostLog.Write("Host state write failed with exception.", ex);
                 ResetGattState();
-                RestartAdvertisementWatcherIfNeeded();
+                RestartAdvertisementWatcherIfNeeded("host state write exception");
                 PublishStatus(false, "Host state write exception: " + ex.Message);
                 return false;
             }
@@ -223,7 +223,7 @@ namespace X3LaptopCompanion
                 if (!IsConnected())
                 {
                     ResetGattState();
-                    RestartAdvertisementWatcherIfNeeded();
+                    RestartAdvertisementWatcherIfNeeded("device add not connected");
                 }
 
                 Interlocked.Exchange(ref connecting, 0);
@@ -234,7 +234,7 @@ namespace X3LaptopCompanion
         {
             HostLog.Write("BLE device removed. Id=" + args.Id);
             ResetGattState();
-            RestartAdvertisementWatcherIfNeeded();
+            RestartAdvertisementWatcherIfNeeded("device removed");
             PublishStatus(false, "X3 companion disconnected.");
         }
 
@@ -295,7 +295,7 @@ namespace X3LaptopCompanion
                 }
 
                 Interlocked.Exchange(ref connecting, 0);
-                RestartAdvertisementWatcherIfNeeded();
+                RestartAdvertisementWatcherIfNeeded("advertisement connect finally");
             }
         }
 
@@ -322,7 +322,7 @@ namespace X3LaptopCompanion
             }
 
             ResetGattState();
-            RestartAdvertisementWatcherIfNeeded();
+            RestartAdvertisementWatcherIfNeeded("gatt session closed");
             PublishStatus(false, "X3 companion GATT session closed.");
         }
 
@@ -361,7 +361,7 @@ namespace X3LaptopCompanion
                 HostLog.Write("BluetoothLEDevice.FromBluetoothAddressAsync returned null for " +
                     FormatBluetoothAddress(bluetoothAddress) + " AddressType=" + addressType);
                 PublishStatus(false, "Unable to open X3 BLE device from advertisement.");
-                RestartAdvertisementWatcherIfNeeded();
+                RestartAdvertisementWatcherIfNeeded("advertisement device null");
                 return;
             }
 
@@ -377,8 +377,9 @@ namespace X3LaptopCompanion
             {
                 session?.Dispose();
                 device.Dispose();
-                PublishStatus(false, "X3 advertisement found, but GATT service could not be opened: " + services.Status);
-                RestartAdvertisementWatcherIfNeeded();
+                PublishStatus(false, "X3 advertisement found, but GATT service could not be opened: " +
+                    services.Status + " count=" + services.Services.Count);
+                RestartAdvertisementWatcherIfNeeded("gatt service lookup failed");
                 return;
             }
 
@@ -424,11 +425,11 @@ namespace X3LaptopCompanion
         {
             GattDeviceServicesResult lastResult = null;
             COMException lastComException = null;
-            for (var attempt = 1; attempt <= 5; attempt++)
+            for (var attempt = 1; attempt <= 10; attempt++)
             {
                 try
                 {
-                    var cacheMode = attempt == 1 ? BluetoothCacheMode.Uncached : BluetoothCacheMode.Cached;
+                    var cacheMode = attempt <= 4 || attempt % 3 == 0 ? BluetoothCacheMode.Uncached : BluetoothCacheMode.Cached;
                     var services = await GetGattServicesForUuidLoggedAsync(device, cacheMode, "attempt " + attempt);
                     lastResult = services;
                     lastComException = null;
@@ -509,7 +510,7 @@ namespace X3LaptopCompanion
                     " deviceInfo=" + (deviceInfoCharacteristic != null));
                 PublishStatus(false, "X3 companion service is missing required characteristics.");
                 ResetGattState();
-                RestartAdvertisementWatcherIfNeeded();
+                RestartAdvertisementWatcherIfNeeded("missing characteristics");
                 return;
             }
 
@@ -528,7 +529,7 @@ namespace X3LaptopCompanion
             {
                 PublishStatus(false, "Could not subscribe to X3 button notifications.");
                 ResetGattState();
-                RestartAdvertisementWatcherIfNeeded();
+                RestartAdvertisementWatcherIfNeeded("button subscribe failed");
                 return;
             }
 
@@ -622,16 +623,18 @@ namespace X3LaptopCompanion
                 string.Join(",", args.Advertisement.ServiceUuids));
         }
 
-        private void RestartAdvertisementWatcherIfNeeded()
+        private void RestartAdvertisementWatcherIfNeeded(string reason)
         {
-            if (!disposed && !IsConnected() && advertisementWatcher != null &&
-                advertisementWatcher.Status != BluetoothLEAdvertisementWatcherStatus.Started)
-            {
-                intentionallyPausedAdvertisementWatcher = false;
-                advertisementWatcher.Start();
-                HostLog.Write("BLE advertisement watcher restarted after unsuccessful GATT connection attempt. Status=" +
-                    advertisementWatcher.Status);
-            }
+            EnsureScanningActive(reason);
+            _ = RetryScanningAfterDelayAsync(reason);
+        }
+
+        private async Task RetryScanningAfterDelayAsync(string reason)
+        {
+            await Task.Delay(1000);
+            EnsureScanningActive(reason + " retry 1s");
+            await Task.Delay(4000);
+            EnsureScanningActive(reason + " retry 5s");
         }
 
         private void EnsureScanningActive(string reason)
