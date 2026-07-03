@@ -108,12 +108,12 @@ namespace X3LaptopCompanion
             Stop();
         }
 
-        public async Task SendHostStatusAsync(bool teamsDetected, CompanionTriState microphone, CompanionTriState camera, string message)
+        public async Task<bool> SendHostStatusAsync(bool teamsDetected, CompanionTriState microphone, CompanionTriState camera, string message)
         {
             if (!await hostStateWriteLock.WaitAsync(0))
             {
                 HostLog.Write("Host state skipped; previous BLE write is still pending.");
-                return;
+                return false;
             }
 
             try
@@ -122,7 +122,7 @@ namespace X3LaptopCompanion
                     hostCameraStateCharacteristic == null || hostStatusMessageCharacteristic == null)
                 {
                     HostLog.Write("Host state skipped; one or more state characteristics are not available.");
-                    return;
+                    return false;
                 }
 
                 var startedAt = DateTimeOffset.Now;
@@ -144,7 +144,10 @@ namespace X3LaptopCompanion
                     ResetGattState();
                     RestartAdvertisementWatcherIfNeeded();
                     PublishStatus(false, "Host state write failed.");
+                    return false;
                 }
+
+                return true;
             }
             catch (Exception ex)
             {
@@ -152,6 +155,7 @@ namespace X3LaptopCompanion
                 ResetGattState();
                 RestartAdvertisementWatcherIfNeeded();
                 PublishStatus(false, "Host state write exception: " + ex.Message);
+                return false;
             }
             finally
             {

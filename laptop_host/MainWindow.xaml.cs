@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 
@@ -28,8 +29,38 @@ namespace X3LaptopCompanion
         private string teamsModeText = "Live Teams";
         private ushort? lastToggleMuteButtonSequence;
         private ushort simulatedButtonSequence = 0xFF00;
+        private bool wasBleConnected;
+        private bool hostStateWriteInFlight;
+        private HostStatePayload lastSentHostState;
+        private HostStatePayload pendingHostState;
+        private string pendingHostStateReason;
         private string detailText =
             "Open Laptop Companion on the X3 Home screen, then pair/connect over BLE once the firmware service is wired in.";
+
+        private sealed class HostStatePayload
+        {
+            public HostStatePayload(bool teamsDetected, CompanionTriState microphone, CompanionTriState camera, string message)
+            {
+                TeamsDetected = teamsDetected;
+                Microphone = microphone;
+                Camera = camera;
+                Message = string.IsNullOrWhiteSpace(message) ? string.Empty : message;
+            }
+
+            public bool TeamsDetected { get; }
+            public CompanionTriState Microphone { get; }
+            public CompanionTriState Camera { get; }
+            public string Message { get; }
+
+            public bool SameAs(HostStatePayload other)
+            {
+                return other != null &&
+                    TeamsDetected == other.TeamsDetected &&
+                    Microphone == other.Microphone &&
+                    Camera == other.Camera &&
+                    string.Equals(Message, other.Message, System.StringComparison.Ordinal);
+            }
+        }
 
         public MainWindow()
         {
@@ -166,8 +197,8 @@ namespace X3LaptopCompanion
                 CameraText = "Unchanged";
                 HostLog.Write("Toggle mute dry-run completed; Teams was not touched.");
                 DetailText = "Dry run: X3 mute command received over BLE. Teams was not focused or controlled.";
-                _ = connectionService.SendHostStatusAsync(true, CompanionTriState.Off, CompanionTriState.Unknown,
-                    "Dry-run mute received");
+                QueueHostStatusIfChanged(true, CompanionTriState.Off, CompanionTriState.Unknown,
+                    "Dry-run mute received", "toggle dry-run");
                 return;
             }
 
@@ -175,7 +206,8 @@ namespace X3LaptopCompanion
             {
                 HostLog.Write("Toggle mute failed; Teams not found.");
                 DetailText = "Teams was not found. Start or join a Teams meeting, then try again.";
-                _ = connectionService.SendHostStatusAsync(false, CompanionTriState.Unknown, CompanionTriState.Unknown, "Teams not found");
+                QueueHostStatusIfChanged(false, CompanionTriState.Unknown, CompanionTriState.Unknown, "Teams not found",
+                    "toggle teams missing");
                 return;
             }
 
@@ -183,7 +215,8 @@ namespace X3LaptopCompanion
             HostLog.Write("Toggle mute sent to Teams.");
             DetailText =
                 "Mute toggle sent with Ctrl+Shift+M. State detection will become authoritative once Teams status detection is implemented.";
-            _ = connectionService.SendHostStatusAsync(true, CompanionTriState.Unknown, CompanionTriState.Unknown, "Mute toggle sent");
+            QueueHostStatusIfChanged(true, CompanionTriState.Unknown, CompanionTriState.Unknown, "Mute toggle sent",
+                "toggle sent");
         }
 
         public void SimulateX3MutePress()
@@ -226,9 +259,9 @@ namespace X3LaptopCompanion
                 return;
             }
 
-            DetailText = "Test status sent over BLE without interacting with Teams.";
-            _ = connectionService.SendHostStatusAsync(true, CompanionTriState.Off, CompanionTriState.Off,
-                "BLE test status");
+            DetailText = "Test status queued for BLE if it changed.";
+            QueueHostStatusIfChanged(true, CompanionTriState.Off, CompanionTriState.Off, "BLE test status",
+                "manual test status");
         }
 
         private void OnLoaded(object sender, RoutedEventArgs e)
@@ -333,9 +366,17 @@ namespace X3LaptopCompanion
                 ConnectionText = status.IsConnected ? "Connected" : "Disconnected";
                 DetailText = status.Message;
                 lastToggleMuteButtonSequence = null;
-                if (status.IsConnected)
+                var reconnected = status.IsConnected && !wasBleConnected;
+                wasBleConnected = status.IsConnected;
+                if (!status.IsConnected)
                 {
-                    SendCurrentHostStatus();
+                    ResetHostStateWriteCache();
+                    return;
+                }
+
+                if (reconnected)
+                {
+                    SendCurrentHostStatus(force: true);
                 }
             });
         }
@@ -395,23 +436,80 @@ namespace X3LaptopCompanion
             }
         }
 
-        private void SendCurrentHostStatus()
+        private void SendCurrentHostStatus(bool force = false)
         {
             if (IsTestMode)
             {
-                SendTestHostStatus("current");
+                SendTestHostStatus("current", force);
                 return;
             }
 
             if (IsTeamsDryRun)
             {
-                _ = connectionService.SendHostStatusAsync(true, CompanionTriState.Unknown, CompanionTriState.Unknown,
-                    "Teams dry run");
+                QueueHostStatusIfChanged(true, CompanionTriState.Unknown, CompanionTriState.Unknown,
+                    "Teams dry run", "current dry-run", force);
                 return;
             }
 
-            _ = connectionService.SendHostStatusAsync(teamsController.IsTeamsRunning, CompanionTriState.Unknown,
-                CompanionTriState.Unknown, teamsController.IsTeamsRunning ? "Teams running" : "Teams not found");
+            QueueHostStatusIfChanged(teamsController.IsTeamsRunning, CompanionTriState.Unknown,
+                CompanionTriState.Unknown, teamsController.IsTeamsRunning ? "Teams running" : "Teams not found",
+                "current", force);
+        }
+
+        private void QueueHostStatusIfChanged(bool teamsDetected, CompanionTriState microphone, CompanionTriState camera,
+            string message, string reason, bool force = false)
+        {
+            var payload = new HostStatePayload(teamsDetected, microphone, camera, message);
+            if (!force && payload.SameAs(lastSentHostState))
+            {
+                HostLog.Write("Host state unchanged; BLE write skipped. reason=" + reason);
+                return;
+            }
+
+            if (hostStateWriteInFlight)
+            {
+                pendingHostState = payload;
+                pendingHostStateReason = reason;
+                HostLog.Write("Host state write deferred while previous write is in flight. reason=" + reason);
+                return;
+            }
+
+            _ = SendHostStatePayloadAsync(payload, reason);
+        }
+
+        private async Task SendHostStatePayloadAsync(HostStatePayload payload, string reason)
+        {
+            hostStateWriteInFlight = true;
+            try
+            {
+                HostLog.Write("Host state write queued. reason=" + reason);
+                var sent = await connectionService.SendHostStatusAsync(payload.TeamsDetected, payload.Microphone,
+                    payload.Camera, payload.Message);
+                if (sent)
+                {
+                    lastSentHostState = payload;
+                }
+            }
+            finally
+            {
+                hostStateWriteInFlight = false;
+                var pending = pendingHostState;
+                var pendingReason = pendingHostStateReason;
+                pendingHostState = null;
+                pendingHostStateReason = null;
+                if (pending != null && !pending.SameAs(lastSentHostState))
+                {
+                    _ = SendHostStatePayloadAsync(pending, pendingReason ?? "pending");
+                }
+            }
+        }
+
+        private void ResetHostStateWriteCache()
+        {
+            lastSentHostState = null;
+            pendingHostState = null;
+            pendingHostStateReason = null;
+            hostStateWriteInFlight = false;
         }
 
         private void OnTestStatusChanged(string reason)
@@ -424,13 +522,13 @@ namespace X3LaptopCompanion
             SendTestHostStatus(reason);
         }
 
-        private void SendTestHostStatus(string reason)
+        private void SendTestHostStatus(string reason, bool force = false)
         {
             ApplyTestStatusToUi();
             var message = string.IsNullOrWhiteSpace(TestMessage) ? "Test status" : TestMessage;
             DetailText = "Test mode sent " + reason + ": teams=" + TestTeamsToggleText +
                 ", mic=" + TestMicrophoneToggleText + ", camera=" + TestCameraToggleText + ".";
-            _ = connectionService.SendHostStatusAsync(TestTeamsDetected, testMicrophone, testCamera, message);
+            QueueHostStatusIfChanged(TestTeamsDetected, testMicrophone, testCamera, message, "test " + reason, force);
         }
 
         private void ApplyTestStatusToUi()
