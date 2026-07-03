@@ -8,7 +8,8 @@ param(
     [switch]$Monitor,
     [int]$MonitorBaud = 115200,
     [switch]$Build,
-    [switch]$SkipVerify
+    [switch]$SkipVerify,
+    [switch]$SkipFlash
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,35 +46,51 @@ function Find-Esptool {
     throw "esptool not found. Build once with PlatformIO or install PlatformIO first."
 }
 
-function Find-Python {
-    $commands = @("python.exe", "python3.exe")
-    foreach ($command in $commands) {
-        $fromPath = Get-Command $command -ErrorAction SilentlyContinue
-        if ($fromPath) {
-            return [pscustomobject]@{
-                Exe = $fromPath.Source
-                Args = @()
-            }
-        }
-    }
+function Test-PythonCandidate {
+    param(
+        [string]$Exe,
+        [string[]]$Args = @()
+    )
 
+    try {
+        & $Exe @Args -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)" *> $null
+        return $LASTEXITCODE -eq 0
+    } catch {
+        return $false
+    }
+}
+
+function Find-Python {
     $pyLauncher = Get-Command py.exe -ErrorAction SilentlyContinue
-    if ($pyLauncher) {
+    if ($pyLauncher -and (Test-PythonCandidate $pyLauncher.Source @("-3"))) {
         return [pscustomobject]@{
             Exe = $pyLauncher.Source
             Args = @("-3")
         }
     }
 
+    $commands = @("python3.exe", "python.exe")
+    foreach ($command in $commands) {
+        $fromPath = Get-Command $command -All -ErrorAction SilentlyContinue
+        foreach ($candidate in $fromPath) {
+            if (Test-PythonCandidate $candidate.Source) {
+                return [pscustomobject]@{
+                    Exe = $candidate.Source
+                    Args = @()
+                }
+            }
+        }
+    }
+
     $penvPython = Join-Path $env:USERPROFILE ".platformio\penv\Scripts\python.exe"
-    if (Test-Path $penvPython) {
+    if ((Test-Path $penvPython) -and (Test-PythonCandidate $penvPython)) {
         return [pscustomobject]@{
             Exe = $penvPython
             Args = @()
         }
     }
 
-    throw "python not found. Install Python 3 first."
+    throw "Python 3.8 or newer not found. Install Python 3 or fix PATH so the debugging monitor can run."
 }
 
 function Find-X3Port {
@@ -102,50 +119,55 @@ if ($Build) {
     & (Join-Path $PSScriptRoot "build_x3_windows.ps1") -Environment $Environment
 }
 
-if ([string]::IsNullOrWhiteSpace($Firmware)) {
-    $Firmware = ".pio\build\$Environment\firmware.bin"
-}
-
-$firmwarePath = Resolve-Path $Firmware
-$firmwareInfo = Get-Item $firmwarePath
-if ($firmwareInfo.Length -gt $appPartitionSize) {
-    throw ("Firmware is too large: 0x{0:x} > 0x{1:x}" -f $firmwareInfo.Length, $appPartitionSize)
-}
-
-if ([string]::IsNullOrWhiteSpace($Port)) {
+if (($Monitor -or -not $SkipFlash) -and [string]::IsNullOrWhiteSpace($Port)) {
     $Port = Find-X3Port
 }
 
-$esptool = Find-Esptool
-$sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $firmwarePath).Hash.ToLowerInvariant()
-
-Write-Host "Firmware: $firmwarePath"
-Write-Host ("Size:     0x{0:x} bytes" -f $firmwareInfo.Length)
-Write-Host "SHA-256:  $sha256"
-Write-Host "Port:     $Port"
-Write-Host "Baud:     $Baud"
-Write-Host "esptool:  $esptool"
-Write-Host ""
-
-& $esptool --chip esp32c3 -p $Port chip-id
-
-Write-Host ""
-Write-Host "Writing both OTA app slots..."
-& $esptool --chip esp32c3 -p $Port -b $Baud write-flash `
-    $app0Offset $firmwarePath `
-    $app1Offset $firmwarePath
-
-if (-not $SkipVerify) {
+if ($SkipFlash) {
     Write-Host ""
-    Write-Host "Verifying both OTA app slots..."
-    & $esptool --chip esp32c3 -p $Port verify-flash $app0Offset $firmwarePath
-    & $esptool --chip esp32c3 -p $Port verify-flash $app1Offset $firmwarePath
-}
+    Write-Host "Skipping flash step."
+} else {
+    if ([string]::IsNullOrWhiteSpace($Firmware)) {
+        $Firmware = ".pio\build\$Environment\firmware.bin"
+    }
 
-clear-Host
-Write-Host ""
-Write-Host "Flashed X3 firmware to app0 and app1 successfully."
-[console]::Beep()
+    $firmwarePath = Resolve-Path $Firmware
+    $firmwareInfo = Get-Item $firmwarePath
+    if ($firmwareInfo.Length -gt $appPartitionSize) {
+        throw ("Firmware is too large: 0x{0:x} > 0x{1:x}" -f $firmwareInfo.Length, $appPartitionSize)
+    }
+
+    $esptool = Find-Esptool
+    $sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $firmwarePath).Hash.ToLowerInvariant()
+
+    Write-Host "Firmware: $firmwarePath"
+    Write-Host ("Size:     0x{0:x} bytes" -f $firmwareInfo.Length)
+    Write-Host "SHA-256:  $sha256"
+    Write-Host "Port:     $Port"
+    Write-Host "Baud:     $Baud"
+    Write-Host "esptool:  $esptool"
+    Write-Host ""
+
+    & $esptool --chip esp32c3 -p $Port chip-id
+
+    Write-Host ""
+    Write-Host "Writing both OTA app slots..."
+    & $esptool --chip esp32c3 -p $Port -b $Baud write-flash `
+        $app0Offset $firmwarePath `
+        $app1Offset $firmwarePath
+
+    if (-not $SkipVerify) {
+        Write-Host ""
+        Write-Host "Verifying both OTA app slots..."
+        & $esptool --chip esp32c3 -p $Port verify-flash $app0Offset $firmwarePath
+        & $esptool --chip esp32c3 -p $Port verify-flash $app1Offset $firmwarePath
+    }
+
+    clear-Host
+    Write-Host ""
+    Write-Host "Flashed X3 firmware to app0 and app1 successfully."
+    [console]::Beep()
+}
 
 if ($Monitor) {
     $python = Find-Python
