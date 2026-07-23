@@ -77,21 +77,40 @@
                       Margin="0,0,0,10" />
             <GroupBox Header="Teams commands"
                       Margin="0,0,0,10">
-                <UniformGrid Rows="1"
-                             Columns="4"
-                             Margin="8">
-                    <Button Content="Mute"
-                            Margin="0,0,8,0"
-                            Click="ToggleMute_Click" />
-                    <Button Content="Speaker"
-                            Margin="0,0,8,0"
-                            Click="ToggleSpeaker_Click" />
-                    <Button Content="Hand"
-                            Margin="0,0,8,0"
-                            Click="ToggleHand_Click" />
-                    <Button Content="Video"
-                            Click="ToggleVideo_Click" />
-                </UniformGrid>
+                <Grid Margin="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="120" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Text="Target PID"
+                               VerticalAlignment="Center"
+                               Margin="0,0,8,8" />
+                    <TextBox Grid.Column="1"
+                             Text="{Binding CommandTargetProcessIdText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                             Margin="0,0,0,8" />
+
+                    <UniformGrid Grid.Row="1"
+                                 Grid.ColumnSpan="2"
+                                 Rows="1"
+                                 Columns="4">
+                        <Button Content="Mute"
+                                Margin="0,0,8,0"
+                                Click="ToggleMute_Click" />
+                        <Button Content="Speaker"
+                                Margin="0,0,8,0"
+                                Click="ToggleSpeaker_Click" />
+                        <Button Content="Hand"
+                                Margin="0,0,8,0"
+                                Click="ToggleHand_Click" />
+                        <Button Content="Video"
+                                Click="ToggleVideo_Click" />
+                    </UniformGrid>
+                </Grid>
             </GroupBox>
             <GroupBox Header="Test status"
                       Margin="0,0,0,10">

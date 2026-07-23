@@ -48,8 +48,20 @@ namespace X3LaptopCompanion
 
         public bool TrySendCommand(TeamsCommand command, IReadOnlyCollection<int> audioProcessIds)
         {
+            return TrySendCommand(command, audioProcessIds, null);
+        }
+
+        public bool TrySendCommand(TeamsCommand command, IReadOnlyCollection<int> audioProcessIds,
+            int? explicitTargetProcessId)
+        {
             var targets = BuildCommandTargets(audioProcessIds).ToList();
+            if (explicitTargetProcessId.HasValue)
+            {
+                targets.Insert(0, BuildExplicitTarget(explicitTargetProcessId.Value));
+            }
+
             HostLog.Write("Teams command target search. command=" + CommandName(command) +
+                " explicitPid=" + (explicitTargetProcessId.HasValue ? explicitTargetProcessId.Value.ToString() : "(none)") +
                 " audioPids=" + FormatIds(audioProcessIds) + " candidates=" +
                 string.Join("; ", targets.Select(DescribeTarget)));
 
@@ -158,6 +170,13 @@ namespace X3LaptopCompanion
                     yield return new CommandTarget(teamsProcess.Id, SafeProcessName(teamsProcess), "teams process");
                 }
             }
+        }
+
+        private static CommandTarget BuildExplicitTarget(int processId)
+        {
+            var process = TryGetProcess(processId);
+            return new CommandTarget(processId, process == null ? "(not running)" : SafeProcessName(process),
+                "explicit target pid");
         }
 
         private static bool IsTeamsProcessName(string name)

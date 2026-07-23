@@ -28,6 +28,7 @@ namespace X3LaptopCompanion
         private string testCameraToggleText = "Unknown";
         private bool isTeamsDryRun;
         private string teamsModeText = "Live Teams";
+        private string commandTargetProcessIdText = string.Empty;
         private ushort? lastToggleMuteButtonSequence;
         private ushort simulatedButtonSequence = 0xFF00;
         private bool wasBleConnected;
@@ -179,6 +180,18 @@ namespace X3LaptopCompanion
         {
             get { return teamsModeText; }
             private set { SetField(ref teamsModeText, value, nameof(TeamsModeText)); }
+        }
+
+        public string CommandTargetProcessIdText
+        {
+            get { return commandTargetProcessIdText; }
+            set
+            {
+                if (SetField(ref commandTargetProcessIdText, value, nameof(CommandTargetProcessIdText)))
+                {
+                    HostLog.Write("Command target PID text changed. value=\"" + value + "\"");
+                }
+            }
         }
 
         public string DetailText
@@ -469,7 +482,8 @@ namespace X3LaptopCompanion
                 return;
             }
 
-            if (!teamsController.TrySendCommand(command, mediaStatusSensor.TeamsAudioProcessIds))
+            var explicitPid = ParseCommandTargetProcessId();
+            if (!teamsController.TrySendCommand(command, mediaStatusSensor.TeamsAudioProcessIds, explicitPid))
             {
                 HostLog.Write(name + " failed; Teams window not found.");
                 DetailText = "Teams was not found. Start or join a Teams meeting, then try again.";
@@ -481,6 +495,24 @@ namespace X3LaptopCompanion
             HostLog.Write(name + " posted to Teams.");
             DetailText = name + " posted to Teams with " + shortcut + ".";
             SendCurrentHostStatus();
+        }
+
+        private int? ParseCommandTargetProcessId()
+        {
+            if (string.IsNullOrWhiteSpace(CommandTargetProcessIdText))
+            {
+                return null;
+            }
+
+            if (int.TryParse(CommandTargetProcessIdText.Trim(), out var processId) && processId > 0)
+            {
+                HostLog.Write("Using explicit Teams command target PID. pid=" + processId);
+                return processId;
+            }
+
+            HostLog.Write("Ignoring invalid Teams command target PID. value=\"" + CommandTargetProcessIdText + "\"");
+            DetailText = "Command target PID is invalid. Enter a numeric PID or leave it blank.";
+            return null;
         }
 
         private void QueueHostStatusIfChanged(bool teamsDetected, CompanionTriState microphone, CompanionTriState camera,
