@@ -18,7 +18,9 @@
   raise/lower hand (`Ctrl+Shift+K`), and video (`Ctrl+Shift+O`).
 - The GUI can dump a selected window's UI Automation tree to the host log.
   The window target accepts `hwnd:0x...`, `0x...`, `pid:1234`, or a title
-  fragment; use `List` to discover visible top-level windows.
+  fragment; use `List` to discover visible top-level windows. Dumps include
+  targeted RawView paths for meeting controls such as mic, camera, hand, menu,
+  and leave buttons.
 - Includes a test mode that keeps BLE active and sends simulated Teams,
   microphone, camera, and status-message values to the X3.
 - Includes a Teams dry-run mode that keeps BLE active and acknowledges X3 mute

@@ -14,6 +14,34 @@ namespace X3LaptopCompanion
     {
         private const int MaxDepth = 9;
         private const int MaxNodes = 1200;
+        private const int MaxRawDepth = 14;
+        private const int MaxRawNodes = 2500;
+        private const int MaxInterestingMatches = 120;
+        private static readonly string[] InterestingAutomationIds =
+        {
+            "microphone-button",
+            "camera-button",
+            "raise-hand-button",
+            "hangup-button",
+            "callingButtons-showMoreBtn",
+            "more-actions-button"
+        };
+
+        private static readonly string[] InterestingNameFragments =
+        {
+            "Mute",
+            "Unmute",
+            "mic",
+            "microphone",
+            "camera",
+            "video",
+            "Raise hand",
+            "Lower hand",
+            "More",
+            "actions",
+            "Leave",
+            "Hang up"
+        };
 
         public bool DumpWindow(string target)
         {
@@ -35,9 +63,19 @@ namespace X3LaptopCompanion
                     return false;
                 }
 
-                var count = 0;
-                DumpElement(root, 0, ref count);
-                HostLog.Write("UIA dump end. nodes=" + count + ".");
+                DumpInterestingPaths(root);
+
+                var controlCount = 0;
+                HostLog.Write("UIA control-view tree begin.");
+                DumpElement(root, TreeWalker.ControlViewWalker, "control", 0, MaxDepth, MaxNodes, ref controlCount);
+                HostLog.Write("UIA control-view tree end. nodes=" + controlCount + ".");
+
+                var rawCount = 0;
+                HostLog.Write("UIA raw-view tree begin.");
+                DumpElement(root, TreeWalker.RawViewWalker, "raw", 0, MaxRawDepth, MaxRawNodes, ref rawCount);
+                HostLog.Write("UIA raw-view tree end. nodes=" + rawCount + ".");
+
+                HostLog.Write("UIA dump end.");
                 return true;
             }
             catch (Exception ex)
@@ -65,17 +103,18 @@ namespace X3LaptopCompanion
             HostLog.Write("UIA window list end.");
         }
 
-        private static void DumpElement(AutomationElement element, int depth, ref int count)
+        private static void DumpElement(AutomationElement element, TreeWalker walker, string viewName, int depth,
+            int maxDepth, int maxNodes, ref int count)
         {
-            if (element == null || count >= MaxNodes)
+            if (element == null || count >= maxNodes)
             {
                 return;
             }
 
-            HostLog.Write("UIA " + new string(' ', depth * 2) + DescribeElement(element));
+            HostLog.Write("UIA " + viewName + " " + new string(' ', depth * 2) + DescribeElement(element));
             count++;
 
-            if (depth >= MaxDepth || count >= MaxNodes)
+            if (depth >= maxDepth || count >= maxNodes)
             {
                 return;
             }
@@ -83,26 +122,156 @@ namespace X3LaptopCompanion
             AutomationElement child = null;
             try
             {
-                child = TreeWalker.ControlViewWalker.GetFirstChild(element);
+                child = walker.GetFirstChild(element);
             }
             catch (Exception ex)
             {
-                HostLog.Write("UIA " + new string(' ', (depth + 1) * 2) + "children unavailable: " + ex.Message);
+                HostLog.Write("UIA " + viewName + " " + new string(' ', (depth + 1) * 2) +
+                    "children unavailable: " + ex.Message);
                 return;
             }
 
-            while (child != null && count < MaxNodes)
+            while (child != null && count < maxNodes)
             {
-                DumpElement(child, depth + 1, ref count);
+                DumpElement(child, walker, viewName, depth + 1, maxDepth, maxNodes, ref count);
                 try
                 {
-                    child = TreeWalker.ControlViewWalker.GetNextSibling(child);
+                    child = walker.GetNextSibling(child);
                 }
                 catch (Exception ex)
                 {
-                    HostLog.Write("UIA " + new string(' ', (depth + 1) * 2) + "sibling unavailable: " + ex.Message);
+                    HostLog.Write("UIA " + viewName + " " + new string(' ', (depth + 1) * 2) +
+                        "sibling unavailable: " + ex.Message);
                     return;
                 }
+            }
+        }
+
+        private static void DumpInterestingPaths(AutomationElement root)
+        {
+            HostLog.Write("UIA interesting paths begin.");
+            var matches = new List<AutomationElement>();
+            var visitedRuntimeIds = new HashSet<string>();
+            FindInterestingDescendants(root, TreeWalker.RawViewWalker, 0, ref matches, visitedRuntimeIds);
+
+            HostLog.Write("UIA interesting paths count=" + matches.Count + ".");
+            for (var i = 0; i < matches.Count; i++)
+            {
+                HostLog.Write("UIA interesting match index=" + i + " " + DescribeElement(matches[i]));
+                HostLog.Write("UIA interesting path index=" + i + " " + BuildPath(root, matches[i]));
+            }
+
+            HostLog.Write("UIA interesting paths end.");
+        }
+
+        private static void FindInterestingDescendants(AutomationElement element, TreeWalker walker, int depth,
+            ref List<AutomationElement> matches, HashSet<string> visitedRuntimeIds)
+        {
+            if (element == null || depth > MaxRawDepth || matches.Count >= MaxInterestingMatches)
+            {
+                return;
+            }
+
+            if (IsInterestingElement(element))
+            {
+                var runtimeId = GetRuntimeIdKey(element);
+                if (visitedRuntimeIds.Add(runtimeId))
+                {
+                    matches.Add(element);
+                }
+            }
+
+            AutomationElement child;
+            try
+            {
+                child = walker.GetFirstChild(element);
+            }
+            catch
+            {
+                return;
+            }
+
+            while (child != null && matches.Count < MaxInterestingMatches)
+            {
+                FindInterestingDescendants(child, walker, depth + 1, ref matches, visitedRuntimeIds);
+                try
+                {
+                    child = walker.GetNextSibling(child);
+                }
+                catch
+                {
+                    return;
+                }
+            }
+        }
+
+        private static bool IsInterestingElement(AutomationElement element)
+        {
+            var automationId = Safe(() => element.Current.AutomationId);
+            var name = Safe(() => element.Current.Name);
+            var controlType = Safe(() => element.Current.ControlType.ProgrammaticName);
+
+            return InterestingAutomationIds.Any(id =>
+                    string.Equals(automationId, id, StringComparison.OrdinalIgnoreCase)) ||
+                InterestingNameFragments.Any(fragment =>
+                    name.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                (controlType.IndexOf("Button", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    !string.IsNullOrWhiteSpace(name));
+        }
+
+        private static string BuildPath(AutomationElement root, AutomationElement element)
+        {
+            var path = new List<string>();
+            var current = element;
+            var safety = 0;
+
+            while (current != null && safety++ < 80)
+            {
+                path.Insert(0, ShortElementLabel(current));
+                if (SameRuntimeId(current, root))
+                {
+                    break;
+                }
+
+                try
+                {
+                    current = TreeWalker.RawViewWalker.GetParent(current);
+                }
+                catch (Exception ex)
+                {
+                    path.Insert(0, "parent unavailable:" + ex.Message);
+                    break;
+                }
+            }
+
+            return string.Join(" -> ", path);
+        }
+
+        private static string ShortElementLabel(AutomationElement element)
+        {
+            return "[" +
+                "name=\"" + Safe(() => element.Current.Name) + "\"" +
+                " automationId=\"" + Safe(() => element.Current.AutomationId) + "\"" +
+                " type=\"" + Safe(() => element.Current.ControlType.ProgrammaticName) + "\"" +
+                " pid=" + Safe(() => element.Current.ProcessId.ToString(CultureInfo.InvariantCulture)) +
+                " hwnd=0x" + Safe(() => element.Current.NativeWindowHandle.ToString("X")) +
+                "]";
+        }
+
+        private static bool SameRuntimeId(AutomationElement first, AutomationElement second)
+        {
+            return string.Equals(GetRuntimeIdKey(first), GetRuntimeIdKey(second), StringComparison.Ordinal);
+        }
+
+        private static string GetRuntimeIdKey(AutomationElement element)
+        {
+            try
+            {
+                return string.Join(".", element.GetRuntimeId() ?? Array.Empty<int>());
+            }
+            catch
+            {
+                return element.GetHashCode().ToString(CultureInfo.InvariantCulture);
             }
         }
 
