@@ -8,7 +8,6 @@ namespace X3LaptopCompanion
 {
     public sealed class MediaStatusSensor
     {
-        private const int HResultNoInterface = unchecked((int)0x80004002);
         private const int HResultNotFound = unchecked((int)0x80070490);
         private const string WebcamConsentStoreKey =
             @"SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam";
@@ -17,7 +16,7 @@ namespace X3LaptopCompanion
         {
             try
             {
-                return IsCaptureSessionActive(processIds) ? CompanionTriState.On : CompanionTriState.Off;
+                return GetTeamsMicrophoneState(processIds);
             }
             catch (Exception ex)
             {
@@ -110,72 +109,11 @@ namespace X3LaptopCompanion
             return key.GetValue("LastUsedTimeStop") is long endTime && endTime <= 0;
         }
 
-        private static bool IsCaptureSessionActive(IReadOnlyCollection<int> processIds)
+        private static CompanionTriState GetTeamsMicrophoneState(IReadOnlyCollection<int> processIds)
         {
             var processSet = new HashSet<int>(processIds ?? Array.Empty<int>());
-
-            try
-            {
-                return IsAnyCaptureEndpointSessionActive(processSet);
-            }
-            catch (InvalidCastException ex)
-            {
-                HostLog.Write("WASAPI capture endpoint enumeration failed; trying default endpoint fallback. " +
-                    ex.Message);
-                return IsDefaultCaptureEndpointSessionActive(processSet);
-            }
-            catch (COMException ex) when (ex.HResult == HResultNoInterface)
-            {
-                HostLog.Write("WASAPI capture endpoint enumeration does not expose IMMDeviceCollection; " +
-                    "trying default endpoint fallback.");
-                return IsDefaultCaptureEndpointSessionActive(processSet);
-            }
-        }
-
-        private static bool IsAnyCaptureEndpointSessionActive(HashSet<int> processSet)
-        {
             object enumeratorObject = null;
-            IMMDeviceCollection devices = null;
-
-            try
-            {
-                enumeratorObject = new MMDeviceEnumerator();
-                var enumerator = (IMMDeviceEnumerator)enumeratorObject;
-                Marshal.ThrowExceptionForHR(enumerator.EnumAudioEndpoints(EDataFlow.Capture, DeviceState.Active, out devices));
-                Marshal.ThrowExceptionForHR(devices.GetCount(out var deviceCount));
-
-                for (uint i = 0; i < deviceCount; i++)
-                {
-                    IMMDevice device = null;
-                    object sessionManagerObject = null;
-
-                    try
-                    {
-                        Marshal.ThrowExceptionForHR(devices.Item(i, out device));
-                        if (DeviceHasActiveCaptureSession(device, processSet))
-                        {
-                            return true;
-                        }
-                    }
-                    finally
-                    {
-                        ReleaseComObject(sessionManagerObject);
-                        ReleaseComObject(device);
-                    }
-                }
-
-                return false;
-            }
-            finally
-            {
-                ReleaseComObject(devices);
-                ReleaseComObject(enumeratorObject);
-            }
-        }
-
-        private static bool IsDefaultCaptureEndpointSessionActive(HashSet<int> processSet)
-        {
-            object enumeratorObject = null;
+            CompanionTriState? sessionState = null;
 
             try
             {
@@ -196,9 +134,25 @@ namespace X3LaptopCompanion
                         }
 
                         Marshal.ThrowExceptionForHR(hr);
-                        if (device != null && DeviceHasActiveCaptureSession(device, processSet))
+                        if (device == null)
                         {
-                            return true;
+                            continue;
+                        }
+
+                        if (TryGetEndpointMuted(device, out var endpointMuted) && endpointMuted)
+                        {
+                            return CompanionTriState.Off;
+                        }
+
+                        var deviceSessionState = GetDeviceTeamsSessionState(device, processSet);
+                        if (deviceSessionState == CompanionTriState.Off)
+                        {
+                            return CompanionTriState.Off;
+                        }
+
+                        if (deviceSessionState.HasValue)
+                        {
+                            sessionState = deviceSessionState.Value;
                         }
                     }
                     finally
@@ -207,7 +161,7 @@ namespace X3LaptopCompanion
                     }
                 }
 
-                return false;
+                return sessionState ?? CompanionTriState.Unknown;
             }
             finally
             {
@@ -215,7 +169,7 @@ namespace X3LaptopCompanion
             }
         }
 
-        private static bool DeviceHasActiveCaptureSession(IMMDevice device, HashSet<int> processSet)
+        private static CompanionTriState? GetDeviceTeamsSessionState(IMMDevice device, HashSet<int> processSet)
         {
             object sessionManagerObject = null;
 
@@ -224,7 +178,7 @@ namespace X3LaptopCompanion
                 var sessionManagerId = typeof(IAudioSessionManager2).GUID;
                 Marshal.ThrowExceptionForHR(device.Activate(ref sessionManagerId, ClsCtxAll, IntPtr.Zero,
                     out sessionManagerObject));
-                return SessionManagerHasActiveCapture((IAudioSessionManager2)sessionManagerObject, processSet);
+                return GetTeamsSessionState((IAudioSessionManager2)sessionManagerObject, processSet);
             }
             finally
             {
@@ -232,9 +186,11 @@ namespace X3LaptopCompanion
             }
         }
 
-        private static bool SessionManagerHasActiveCapture(IAudioSessionManager2 sessionManager, HashSet<int> processIds)
+        private static CompanionTriState? GetTeamsSessionState(IAudioSessionManager2 sessionManager, HashSet<int> processIds)
         {
             IAudioSessionEnumerator sessionEnumerator = null;
+            var sawTeamsSession = false;
+            var sawActiveTeamsSession = false;
 
             try
             {
@@ -248,27 +204,21 @@ namespace X3LaptopCompanion
                     try
                     {
                         Marshal.ThrowExceptionForHR(sessionEnumerator.GetSession(i, out sessionControl));
+                        if (!SessionMatchesTeams(sessionControl, processIds))
+                        {
+                            continue;
+                        }
+
+                        sawTeamsSession = true;
+                        if (TryGetSessionMuted(sessionControl, out var sessionMuted) && sessionMuted)
+                        {
+                            return CompanionTriState.Off;
+                        }
+
                         Marshal.ThrowExceptionForHR(sessionControl.GetState(out var state));
-                        if (state != AudioSessionState.Active)
+                        if (state == AudioSessionState.Active)
                         {
-                            continue;
-                        }
-
-                        if (processIds.Count == 0)
-                        {
-                            return true;
-                        }
-
-                        var sessionControl2 = sessionControl as IAudioSessionControl2;
-                        if (sessionControl2 == null)
-                        {
-                            continue;
-                        }
-
-                        Marshal.ThrowExceptionForHR(sessionControl2.GetProcessId(out var processId));
-                        if (processIds.Contains((int)processId) || SessionDisplayNameLooksLikeTeams(sessionControl))
-                        {
-                            return true;
+                            sawActiveTeamsSession = true;
                         }
                     }
                     finally
@@ -277,11 +227,83 @@ namespace X3LaptopCompanion
                     }
                 }
 
-                return false;
+                if (sawActiveTeamsSession)
+                {
+                    return CompanionTriState.On;
+                }
+
+                return sawTeamsSession ? CompanionTriState.Unknown : null;
             }
             finally
             {
                 ReleaseComObject(sessionEnumerator);
+            }
+        }
+
+        private static bool SessionMatchesTeams(IAudioSessionControl sessionControl, HashSet<int> processIds)
+        {
+            var sessionControl2 = sessionControl as IAudioSessionControl2;
+            if (sessionControl2 != null)
+            {
+                try
+                {
+                    Marshal.ThrowExceptionForHR(sessionControl2.GetProcessId(out var processId));
+                    if (processIds.Contains((int)processId))
+                    {
+                        return true;
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            return SessionDisplayNameLooksLikeTeams(sessionControl);
+        }
+
+        private static bool TryGetSessionMuted(IAudioSessionControl sessionControl, out bool muted)
+        {
+            muted = false;
+            var simpleAudioVolume = sessionControl as ISimpleAudioVolume;
+            if (simpleAudioVolume == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                Marshal.ThrowExceptionForHR(simpleAudioVolume.GetMute(out muted));
+                return true;
+            }
+            catch
+            {
+                muted = false;
+                return false;
+            }
+        }
+
+        private static bool TryGetEndpointMuted(IMMDevice device, out bool muted)
+        {
+            object endpointVolumeObject = null;
+            muted = false;
+
+            try
+            {
+                var endpointVolumeId = typeof(IAudioEndpointVolume).GUID;
+                Marshal.ThrowExceptionForHR(device.Activate(ref endpointVolumeId, ClsCtxAll, IntPtr.Zero,
+                    out endpointVolumeObject));
+                var endpointVolume = (IAudioEndpointVolume)endpointVolumeObject;
+                Marshal.ThrowExceptionForHR(endpointVolume.GetMute(out muted));
+                return true;
+            }
+            catch
+            {
+                muted = false;
+                return false;
+            }
+            finally
+            {
+                ReleaseComObject(endpointVolumeObject);
             }
         }
 
@@ -357,8 +379,7 @@ namespace X3LaptopCompanion
         [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         private interface IMMDeviceEnumerator
         {
-            int EnumAudioEndpoints(EDataFlow dataFlow, DeviceState dwStateMask,
-                [MarshalAs(UnmanagedType.Interface)] out IMMDeviceCollection ppDevices);
+            int EnumAudioEndpoints(EDataFlow dataFlow, DeviceState dwStateMask, out IntPtr ppDevices);
             int GetDefaultAudioEndpoint(EDataFlow dataFlow, ERole role,
                 [MarshalAs(UnmanagedType.Interface)] out IMMDevice ppEndpoint);
             int GetDevice([MarshalAs(UnmanagedType.LPWStr)] string pwstrId,
@@ -446,6 +467,42 @@ namespace X3LaptopCompanion
             int GetProcessId(out uint retVal);
             int IsSystemSoundsSession();
             int SetDuckingPreference(bool optOut);
+        }
+
+        [ComImport]
+        [Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface ISimpleAudioVolume
+        {
+            int SetMasterVolume(float level, ref Guid eventContext);
+            int GetMasterVolume(out float level);
+            int SetMute([MarshalAs(UnmanagedType.Bool)] bool muted, ref Guid eventContext);
+            int GetMute([MarshalAs(UnmanagedType.Bool)] out bool muted);
+        }
+
+        [ComImport]
+        [Guid("5CDF2C82-841E-4546-9722-0CF74078229A")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IAudioEndpointVolume
+        {
+            int RegisterControlChangeNotify(IntPtr client);
+            int UnregisterControlChangeNotify(IntPtr client);
+            int GetChannelCount(out uint channelCount);
+            int SetMasterVolumeLevel(float levelDb, ref Guid eventContext);
+            int SetMasterVolumeLevelScalar(float level, ref Guid eventContext);
+            int GetMasterVolumeLevel(out float levelDb);
+            int GetMasterVolumeLevelScalar(out float level);
+            int SetChannelVolumeLevel(uint channelNumber, float levelDb, ref Guid eventContext);
+            int SetChannelVolumeLevelScalar(uint channelNumber, float level, ref Guid eventContext);
+            int GetChannelVolumeLevel(uint channelNumber, out float levelDb);
+            int GetChannelVolumeLevelScalar(uint channelNumber, out float level);
+            int SetMute([MarshalAs(UnmanagedType.Bool)] bool muted, ref Guid eventContext);
+            int GetMute([MarshalAs(UnmanagedType.Bool)] out bool muted);
+            int GetVolumeStepInfo(out uint step, out uint stepCount);
+            int VolumeStepUp(ref Guid eventContext);
+            int VolumeStepDown(ref Guid eventContext);
+            int QueryHardwareSupport(out uint hardwareSupportMask);
+            int GetVolumeRange(out float minDb, out float maxDb, out float incrementDb);
         }
     }
 }

@@ -23,7 +23,8 @@
 - Writes a diagnostic log to `%LOCALAPPDATA%\X3LaptopCompanion\host.log`.
   Use the `Open Log` button or tray menu item to jump to it.
 
-Microphone status is detected from active Teams capture sessions through WASAPI.
+Microphone status is detected from WASAPI endpoint/session mute state, with
+active Teams capture sessions used as a best-effort live signal.
 Camera status is detected from the Windows webcam consent-store timestamps.
 
 ## Build
