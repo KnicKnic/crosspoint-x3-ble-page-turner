@@ -20,6 +20,10 @@ namespace X3LaptopCompanion
         private const int MaxEmbeddedBrowserNodes = 8000;
         private const int MaxEmbeddedBrowserSearchDepth = 28;
         private const int MaxEmbeddedBrowserRoots = 20;
+        private const int MaxProcessRoots = 120;
+        private const int MaxProcessTreeDepth = 12;
+        private const int MaxProcessTreeNodes = 2000;
+        private const int MaxUnmuteMatches = 80;
         private const int MaxInterestingMatches = 120;
         private static readonly string[] InterestingAutomationIds =
         {
@@ -67,19 +71,17 @@ namespace X3LaptopCompanion
                     return false;
                 }
 
-                DumpInterestingPaths(root);
+                var targetProcessId = TryGetRequestedProcessId(target, resolvedBy);
+                if (!targetProcessId.HasValue)
+                {
+                    GetWindowThreadProcessId(hwnd, out var windowProcessId);
+                    targetProcessId = windowProcessId;
+                }
 
-                var controlCount = 0;
-                HostLog.Write("UIA control-view tree begin.");
-                DumpElement(root, TreeWalker.ControlViewWalker, "control", 0, MaxDepth, MaxNodes, ref controlCount);
-                HostLog.Write("UIA control-view tree end. nodes=" + controlCount + ".");
-
-                var rawCount = 0;
-                HostLog.Write("UIA raw-view tree begin.");
-                DumpElement(root, TreeWalker.RawViewWalker, "raw", 0, MaxRawDepth, MaxRawNodes, ref rawCount);
-                HostLog.Write("UIA raw-view tree end. nodes=" + rawCount + ".");
-
-                DumpEmbeddedBrowserRoots(root);
+                HostLog.Write("UIA focused dump. targetPid=" + targetProcessId.Value +
+                    " targetProcess=\"" + GetProcessName(targetProcessId.Value) + "\"");
+                DumpProcessScopedTrees(root, targetProcessId.Value);
+                DumpUnmuteButtonPaths(root);
 
                 HostLog.Write("UIA dump end.");
                 return true;
@@ -89,6 +91,45 @@ namespace X3LaptopCompanion
                 HostLog.Write("UIA dump failed: " + ex);
                 return false;
             }
+        }
+
+        private static void DumpProcessScopedTrees(AutomationElement root, int processId)
+        {
+            var processRoots = new List<AutomationElement>();
+            var visitedRuntimeIds = new HashSet<string>();
+            FindProcessRoots(root, processId, TreeWalker.RawViewWalker, 0, processRoots, visitedRuntimeIds);
+
+            HostLog.Write("UIA process-scoped roots begin. pid=" + processId + " count=" + processRoots.Count + ".");
+            for (var i = 0; i < processRoots.Count; i++)
+            {
+                var processRoot = processRoots[i];
+                HostLog.Write("UIA process-scoped root index=" + i + " " + DescribeElement(processRoot));
+                HostLog.Write("UIA process-scoped root path index=" + i + " " + BuildPath(root, processRoot));
+
+                var count = 0;
+                HostLog.Write("UIA process-scoped tree begin. index=" + i + ".");
+                DumpElement(processRoot, TreeWalker.RawViewWalker, "process-raw-" + i, 0,
+                    MaxProcessTreeDepth, MaxProcessTreeNodes, ref count);
+                HostLog.Write("UIA process-scoped tree end. index=" + i + " nodes=" + count + ".");
+            }
+
+            HostLog.Write("UIA process-scoped roots end.");
+        }
+
+        private static void DumpUnmuteButtonPaths(AutomationElement root)
+        {
+            var matches = new List<AutomationElement>();
+            var visitedRuntimeIds = new HashSet<string>();
+            FindUnmuteButtons(root, TreeWalker.RawViewWalker, 0, matches, visitedRuntimeIds);
+
+            HostLog.Write("UIA unmute button paths begin. count=" + matches.Count + ".");
+            for (var i = 0; i < matches.Count; i++)
+            {
+                HostLog.Write("UIA unmute button match index=" + i + " " + DescribeElement(matches[i]));
+                HostLog.Write("UIA unmute button path index=" + i + " " + BuildPath(root, matches[i]));
+            }
+
+            HostLog.Write("UIA unmute button paths end.");
         }
 
         public void ListWindows(string filter)
@@ -301,6 +342,130 @@ namespace X3LaptopCompanion
                 {
                     return;
                 }
+            }
+        }
+
+        private static void FindProcessRoots(AutomationElement element, int processId, TreeWalker walker, int depth,
+            List<AutomationElement> roots, HashSet<string> visitedRuntimeIds)
+        {
+            if (element == null || depth > MaxRawDepth || roots.Count >= MaxProcessRoots)
+            {
+                return;
+            }
+
+            var isProcessElement = TryGetElementProcessId(element, out var elementProcessId) &&
+                elementProcessId == processId;
+            if (isProcessElement)
+            {
+                var parentMatches = false;
+                try
+                {
+                    var parent = walker.GetParent(element);
+                    parentMatches = parent != null &&
+                        TryGetElementProcessId(parent, out var parentProcessId) &&
+                        parentProcessId == processId;
+                }
+                catch
+                {
+                    parentMatches = false;
+                }
+
+                if (!parentMatches)
+                {
+                    var runtimeId = GetRuntimeIdKey(element);
+                    if (visitedRuntimeIds.Add(runtimeId))
+                    {
+                        roots.Add(element);
+                    }
+                }
+            }
+
+            AutomationElement child;
+            try
+            {
+                child = walker.GetFirstChild(element);
+            }
+            catch
+            {
+                return;
+            }
+
+            while (child != null && roots.Count < MaxProcessRoots)
+            {
+                FindProcessRoots(child, processId, walker, depth + 1, roots, visitedRuntimeIds);
+                try
+                {
+                    child = walker.GetNextSibling(child);
+                }
+                catch
+                {
+                    return;
+                }
+            }
+        }
+
+        private static void FindUnmuteButtons(AutomationElement element, TreeWalker walker, int depth,
+            List<AutomationElement> matches, HashSet<string> visitedRuntimeIds)
+        {
+            if (element == null || depth > MaxEmbeddedBrowserDepth || matches.Count >= MaxUnmuteMatches)
+            {
+                return;
+            }
+
+            if (IsUnmuteButton(element))
+            {
+                var runtimeId = GetRuntimeIdKey(element);
+                if (visitedRuntimeIds.Add(runtimeId))
+                {
+                    matches.Add(element);
+                }
+            }
+
+            AutomationElement child;
+            try
+            {
+                child = walker.GetFirstChild(element);
+            }
+            catch
+            {
+                return;
+            }
+
+            while (child != null && matches.Count < MaxUnmuteMatches)
+            {
+                FindUnmuteButtons(child, walker, depth + 1, matches, visitedRuntimeIds);
+                try
+                {
+                    child = walker.GetNextSibling(child);
+                }
+                catch
+                {
+                    return;
+                }
+            }
+        }
+
+        private static bool IsUnmuteButton(AutomationElement element)
+        {
+            var name = Safe(() => element.Current.Name);
+            var controlType = Safe(() => element.Current.ControlType.ProgrammaticName);
+            return name.IndexOf("Unmute", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                controlType.IndexOf("Button", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool TryGetElementProcessId(AutomationElement element, out int processId)
+        {
+            processId = 0;
+
+            try
+            {
+                processId = element.Current.ProcessId;
+                return processId > 0;
+            }
+            catch
+            {
+                processId = 0;
+                return false;
             }
         }
 
@@ -523,12 +688,112 @@ namespace X3LaptopCompanion
 
             if (window == null)
             {
-                return false;
+                window = FindWindowHostingProcess(pid);
+                if (window == null)
+                {
+                    return false;
+                }
+
+                hwnd = window.Hwnd;
+                resolvedBy = "hosted pid";
+                return true;
             }
 
             hwnd = window.Hwnd;
             resolvedBy = "pid";
             return true;
+        }
+
+        private static WindowInfo FindWindowHostingProcess(int processId)
+        {
+            foreach (var window in GetTopLevelWindows().Where(w => !string.IsNullOrWhiteSpace(w.Title)))
+            {
+                try
+                {
+                    var root = AutomationElement.FromHandle(window.Hwnd);
+                    if (root != null && ContainsProcessId(root, processId, TreeWalker.RawViewWalker, 0, 0))
+                    {
+                        return window;
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            return null;
+        }
+
+        private static bool ContainsProcessId(AutomationElement element, int processId, TreeWalker walker, int depth,
+            int nodeCount)
+        {
+            if (element == null || depth > MaxEmbeddedBrowserSearchDepth || nodeCount > MaxRawNodes)
+            {
+                return false;
+            }
+
+            if (TryGetElementProcessId(element, out var elementProcessId) && elementProcessId == processId)
+            {
+                return true;
+            }
+
+            AutomationElement child;
+            try
+            {
+                child = walker.GetFirstChild(element);
+            }
+            catch
+            {
+                return false;
+            }
+
+            while (child != null)
+            {
+                nodeCount++;
+                if (ContainsProcessId(child, processId, walker, depth + 1, nodeCount))
+                {
+                    return true;
+                }
+
+                try
+                {
+                    child = walker.GetNextSibling(child);
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            return false;
+        }
+
+        private static int? TryGetRequestedProcessId(string target, string resolvedBy)
+        {
+            target = (target ?? string.Empty).Trim();
+            if (target.StartsWith("pid:", StringComparison.OrdinalIgnoreCase))
+            {
+                target = target.Substring(4).Trim();
+            }
+            else if (target.StartsWith("hwnd:", StringComparison.OrdinalIgnoreCase) ||
+                     target.StartsWith("title:", StringComparison.OrdinalIgnoreCase) ||
+                     target.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+            else if (!string.Equals(resolvedBy, "pid", StringComparison.OrdinalIgnoreCase) &&
+                     !string.Equals(resolvedBy, "hosted pid", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            if (int.TryParse(target, NumberStyles.Integer, CultureInfo.InvariantCulture, out var processId) &&
+                processId > 0)
+            {
+                return processId;
+            }
+
+            return null;
         }
 
         private static bool TryResolveTitle(string value, out IntPtr hwnd, out string resolvedBy)
