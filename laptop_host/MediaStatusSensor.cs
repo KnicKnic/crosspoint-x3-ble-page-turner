@@ -12,6 +12,19 @@ namespace X3LaptopCompanion
         private const string WebcamConsentStoreKey =
             @"SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam";
         private static DateTime lastWasapiDumpUtc = DateTime.MinValue;
+        private readonly object teamsAudioProcessIdsLock = new object();
+        private IReadOnlyCollection<int> teamsAudioProcessIds = Array.Empty<int>();
+
+        public IReadOnlyCollection<int> TeamsAudioProcessIds
+        {
+            get
+            {
+                lock (teamsAudioProcessIdsLock)
+                {
+                    return teamsAudioProcessIds.ToList();
+                }
+            }
+        }
 
         public CompanionTriState GetMicrophoneState(IReadOnlyCollection<int> processIds)
         {
@@ -23,6 +36,7 @@ namespace X3LaptopCompanion
             }
             catch (Exception ex)
             {
+                SetTeamsAudioProcessIds(new HashSet<int>());
                 HostLog.Write("WASAPI microphone detection failed: " + ex.Message);
                 return CompanionTriState.Unknown;
             }
@@ -180,7 +194,24 @@ namespace X3LaptopCompanion
             }
         }
 
-        private static CompanionTriState GetTeamsMicrophoneState(IReadOnlyCollection<int> processIds)
+        private CompanionTriState GetTeamsMicrophoneState(IReadOnlyCollection<int> processIds)
+        {
+            var matchedAudioProcessIds = new HashSet<int>();
+            var state = GetTeamsMicrophoneState(processIds, matchedAudioProcessIds);
+            SetTeamsAudioProcessIds(matchedAudioProcessIds);
+            return state;
+        }
+
+        private void SetTeamsAudioProcessIds(HashSet<int> processIds)
+        {
+            lock (teamsAudioProcessIdsLock)
+            {
+                teamsAudioProcessIds = processIds.ToList();
+            }
+        }
+
+        private static CompanionTriState GetTeamsMicrophoneState(IReadOnlyCollection<int> processIds,
+            HashSet<int> matchedAudioProcessIds)
         {
             var processSet = new HashSet<int>(processIds ?? Array.Empty<int>());
             object enumeratorObject = null;
@@ -215,7 +246,7 @@ namespace X3LaptopCompanion
                             return CompanionTriState.Off;
                         }
 
-                        var deviceSessionState = GetDeviceTeamsSessionState(device, processSet);
+                        var deviceSessionState = GetDeviceTeamsSessionState(device, processSet, matchedAudioProcessIds);
                         if (deviceSessionState == CompanionTriState.Off)
                         {
                             return CompanionTriState.Off;
@@ -240,7 +271,8 @@ namespace X3LaptopCompanion
             }
         }
 
-        private static CompanionTriState? GetDeviceTeamsSessionState(IMMDevice device, HashSet<int> processSet)
+        private static CompanionTriState? GetDeviceTeamsSessionState(IMMDevice device, HashSet<int> processSet,
+            HashSet<int> matchedAudioProcessIds)
         {
             object sessionManagerObject = null;
 
@@ -249,7 +281,8 @@ namespace X3LaptopCompanion
                 var sessionManagerId = typeof(IAudioSessionManager2).GUID;
                 Marshal.ThrowExceptionForHR(device.Activate(ref sessionManagerId, ClsCtxAll, IntPtr.Zero,
                     out sessionManagerObject));
-                return GetTeamsSessionState((IAudioSessionManager2)sessionManagerObject, processSet);
+                return GetTeamsSessionState((IAudioSessionManager2)sessionManagerObject, processSet,
+                    matchedAudioProcessIds);
             }
             finally
             {
@@ -326,7 +359,8 @@ namespace X3LaptopCompanion
             }
         }
 
-        private static CompanionTriState? GetTeamsSessionState(IAudioSessionManager2 sessionManager, HashSet<int> processIds)
+        private static CompanionTriState? GetTeamsSessionState(IAudioSessionManager2 sessionManager,
+            HashSet<int> processIds, HashSet<int> matchedAudioProcessIds)
         {
             IAudioSessionEnumerator sessionEnumerator = null;
             var sawTeamsSession = false;
@@ -350,6 +384,11 @@ namespace X3LaptopCompanion
                         }
 
                         sawTeamsSession = true;
+                        if (TryGetSessionProcessId(sessionControl, out var matchedProcessId) && matchedProcessId > 0)
+                        {
+                            matchedAudioProcessIds.Add((int)matchedProcessId);
+                        }
+
                         if (TryGetSessionMuted(sessionControl, out var sessionMuted) && sessionMuted)
                         {
                             return CompanionTriState.Off;

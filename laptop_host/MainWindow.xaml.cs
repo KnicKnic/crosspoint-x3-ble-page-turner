@@ -469,7 +469,7 @@ namespace X3LaptopCompanion
                 return;
             }
 
-            if (!teamsController.TrySendCommand(command))
+            if (!teamsController.TrySendCommand(command, mediaStatusSensor.TeamsAudioProcessIds))
             {
                 HostLog.Write(name + " failed; Teams window not found.");
                 DetailText = "Teams was not found. Start or join a Teams meeting, then try again.";
