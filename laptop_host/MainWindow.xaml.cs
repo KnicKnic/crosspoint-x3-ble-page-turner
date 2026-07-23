@@ -9,6 +9,7 @@ namespace X3LaptopCompanion
     public partial class MainWindow : Window, INotifyPropertyChanged
     {
         private readonly TeamsController teamsController = new TeamsController();
+        private readonly MediaStatusSensor mediaStatusSensor = new MediaStatusSensor();
         private readonly CompanionConnectionService connectionService = new CompanionConnectionService();
         private readonly DispatcherTimer statusTimer = new DispatcherTimer();
 
@@ -188,35 +189,7 @@ namespace X3LaptopCompanion
 
         public void ToggleMuteFromUi()
         {
-            HostLog.Write("Toggle mute requested.");
-            RefreshTeamsPresence();
-            if (IsTeamsDryRun)
-            {
-                TeamsText = "Dry run";
-                MicrophoneText = "Toggle received";
-                CameraText = "Unchanged";
-                HostLog.Write("Toggle mute dry-run completed; Teams was not touched.");
-                DetailText = "Dry run: X3 mute command received over BLE. Teams was not focused or controlled.";
-                QueueHostStatusIfChanged(true, CompanionTriState.Off, CompanionTriState.Unknown,
-                    "Dry-run mute received", "toggle dry-run");
-                return;
-            }
-
-            if (!teamsController.TryToggleMute())
-            {
-                HostLog.Write("Toggle mute failed; Teams not found.");
-                DetailText = "Teams was not found. Start or join a Teams meeting, then try again.";
-                QueueHostStatusIfChanged(false, CompanionTriState.Unknown, CompanionTriState.Unknown, "Teams not found",
-                    "toggle teams missing");
-                return;
-            }
-
-            MicrophoneText = "Toggle sent";
-            HostLog.Write("Toggle mute sent to Teams.");
-            DetailText =
-                "Mute toggle sent with Ctrl+Shift+M. State detection will become authoritative once Teams status detection is implemented.";
-            QueueHostStatusIfChanged(true, CompanionTriState.Unknown, CompanionTriState.Unknown, "Mute toggle sent",
-                "toggle sent");
+            SendTeamsCommandFromUi(TeamsCommand.ToggleMute);
         }
 
         public void SimulateX3MutePress()
@@ -299,6 +272,21 @@ namespace X3LaptopCompanion
             OpenLog();
         }
 
+        private void ToggleSpeaker_Click(object sender, RoutedEventArgs e)
+        {
+            SendTeamsCommandFromUi(TeamsCommand.ToggleSpeaker);
+        }
+
+        private void ToggleHand_Click(object sender, RoutedEventArgs e)
+        {
+            SendTeamsCommandFromUi(TeamsCommand.ToggleHand);
+        }
+
+        private void ToggleVideo_Click(object sender, RoutedEventArgs e)
+        {
+            SendTeamsCommandFromUi(TeamsCommand.ToggleVideo);
+        }
+
         private void CycleTestMicrophone_Click(object sender, RoutedEventArgs e)
         {
             testMicrophone = NextTriState(testMicrophone);
@@ -340,9 +328,14 @@ namespace X3LaptopCompanion
                 return;
             }
 
-            TeamsText = teamsController.IsTeamsRunning ? "Running" : "Not detected";
-            CameraText = "Unknown";
-            MicrophoneText = "Unknown";
+            var teamsRunning = teamsController.IsTeamsRunning;
+            TeamsText = teamsRunning ? "Running" : "Not detected";
+            var microphone = teamsRunning
+                ? mediaStatusSensor.GetMicrophoneState(teamsController.TeamsProcessIds)
+                : CompanionTriState.Unknown;
+            var camera = mediaStatusSensor.GetCameraState();
+            MicrophoneText = TriStateText(microphone, "Muted", "Live");
+            CameraText = TriStateText(camera, "Off", "Active");
         }
 
         private void OnStatusTimerTick(object sender, System.EventArgs e)
@@ -451,9 +444,43 @@ namespace X3LaptopCompanion
                 return;
             }
 
-            QueueHostStatusIfChanged(teamsController.IsTeamsRunning, CompanionTriState.Unknown,
-                CompanionTriState.Unknown, teamsController.IsTeamsRunning ? "Teams running" : "Teams not found",
-                "current", force);
+            var teamsRunning = teamsController.IsTeamsRunning;
+            var microphone = teamsRunning
+                ? mediaStatusSensor.GetMicrophoneState(teamsController.TeamsProcessIds)
+                : CompanionTriState.Unknown;
+            var camera = mediaStatusSensor.GetCameraState();
+            QueueHostStatusIfChanged(teamsRunning, microphone, camera,
+                teamsRunning ? "Teams running" : "Teams not found", "current", force);
+        }
+
+        private void SendTeamsCommandFromUi(TeamsCommand command)
+        {
+            var name = TeamsController.CommandName(command);
+            var shortcut = TeamsController.CommandShortcut(command);
+            HostLog.Write(name + " requested.");
+            RefreshTeamsPresence();
+            if (IsTeamsDryRun)
+            {
+                TeamsText = "Dry run";
+                HostLog.Write(name + " dry-run completed; Teams was not touched.");
+                DetailText = "Dry run: " + name + " requested. Teams was not controlled.";
+                QueueHostStatusIfChanged(true, CompanionTriState.Unknown, CompanionTriState.Unknown,
+                    "Dry-run " + name, "teams command dry-run");
+                return;
+            }
+
+            if (!teamsController.TrySendCommand(command))
+            {
+                HostLog.Write(name + " failed; Teams window not found.");
+                DetailText = "Teams was not found. Start or join a Teams meeting, then try again.";
+                QueueHostStatusIfChanged(false, CompanionTriState.Unknown, CompanionTriState.Unknown,
+                    "Teams not found", "teams command missing");
+                return;
+            }
+
+            HostLog.Write(name + " posted to Teams.");
+            DetailText = name + " posted to Teams with " + shortcut + ".";
+            SendCurrentHostStatus();
         }
 
         private void QueueHostStatusIfChanged(bool teamsDetected, CompanionTriState microphone, CompanionTriState camera,

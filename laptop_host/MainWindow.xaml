@@ -6,9 +6,9 @@
         xmlns:local="clr-namespace:X3LaptopCompanion"
         mc:Ignorable="d"
         Title="X3 Laptop Companion"
-        Height="520"
+        Height="580"
         Width="620"
-        MinHeight="500"
+        MinHeight="560"
         MinWidth="560"
         WindowStartupLocation="CenterScreen">
     <Grid Margin="24">
@@ -75,6 +75,24 @@
             <CheckBox Content="Teams dry run"
                       IsChecked="{Binding IsTeamsDryRun, Mode=TwoWay}"
                       Margin="0,0,0,10" />
+            <GroupBox Header="Teams commands"
+                      Margin="0,0,0,10">
+                <UniformGrid Rows="1"
+                             Columns="4"
+                             Margin="8">
+                    <Button Content="Mute"
+                            Margin="0,0,8,0"
+                            Click="ToggleMute_Click" />
+                    <Button Content="Speaker"
+                            Margin="0,0,8,0"
+                            Click="ToggleSpeaker_Click" />
+                    <Button Content="Hand"
+                            Margin="0,0,8,0"
+                            Click="ToggleHand_Click" />
+                    <Button Content="Video"
+                            Click="ToggleVideo_Click" />
+                </UniformGrid>
+            </GroupBox>
             <GroupBox Header="Test status"
                       Margin="0,0,0,10">
                 <Grid Margin="8">
