@@ -14,8 +14,12 @@ namespace X3LaptopCompanion
     {
         private const int MaxDepth = 9;
         private const int MaxNodes = 1200;
-        private const int MaxRawDepth = 14;
-        private const int MaxRawNodes = 2500;
+        private const int MaxRawDepth = 24;
+        private const int MaxRawNodes = 5000;
+        private const int MaxEmbeddedBrowserDepth = 32;
+        private const int MaxEmbeddedBrowserNodes = 8000;
+        private const int MaxEmbeddedBrowserSearchDepth = 28;
+        private const int MaxEmbeddedBrowserRoots = 20;
         private const int MaxInterestingMatches = 120;
         private static readonly string[] InterestingAutomationIds =
         {
@@ -74,6 +78,8 @@ namespace X3LaptopCompanion
                 HostLog.Write("UIA raw-view tree begin.");
                 DumpElement(root, TreeWalker.RawViewWalker, "raw", 0, MaxRawDepth, MaxRawNodes, ref rawCount);
                 HostLog.Write("UIA raw-view tree end. nodes=" + rawCount + ".");
+
+                DumpEmbeddedBrowserRoots(root);
 
                 HostLog.Write("UIA dump end.");
                 return true;
@@ -164,10 +170,62 @@ namespace X3LaptopCompanion
             HostLog.Write("UIA interesting paths end.");
         }
 
+        private static void DumpEmbeddedBrowserRoots(AutomationElement root)
+        {
+            var roots = new List<AutomationElement>();
+            var visitedRuntimeIds = new HashSet<string>();
+            FindEmbeddedBrowserRoots(root, TreeWalker.RawViewWalker, 0, roots, visitedRuntimeIds);
+
+            HostLog.Write("UIA embedded-browser roots begin. count=" + roots.Count + ".");
+            for (var i = 0; i < roots.Count; i++)
+            {
+                var browserRoot = roots[i];
+                HostLog.Write("UIA embedded-browser root index=" + i + " " + DescribeElement(browserRoot));
+                HostLog.Write("UIA embedded-browser root path index=" + i + " " + BuildPath(root, browserRoot));
+
+                DumpInterestingPaths(browserRoot, "embedded-browser " + i);
+
+                var browserCount = 0;
+                HostLog.Write("UIA embedded-browser raw-view tree begin. index=" + i + ".");
+                DumpElement(browserRoot, TreeWalker.RawViewWalker, "embedded-raw-" + i, 0,
+                    MaxEmbeddedBrowserDepth, MaxEmbeddedBrowserNodes, ref browserCount);
+                HostLog.Write("UIA embedded-browser raw-view tree end. index=" + i +
+                    " nodes=" + browserCount + ".");
+            }
+
+            HostLog.Write("UIA embedded-browser roots end.");
+        }
+
+        private static void DumpInterestingPaths(AutomationElement root, string scope)
+        {
+            HostLog.Write("UIA interesting paths begin. scope=\"" + scope + "\"");
+            var matches = new List<AutomationElement>();
+            var visitedRuntimeIds = new HashSet<string>();
+            FindInterestingDescendants(root, TreeWalker.RawViewWalker, 0, ref matches, visitedRuntimeIds,
+                MaxEmbeddedBrowserDepth);
+
+            HostLog.Write("UIA interesting paths count=" + matches.Count + " scope=\"" + scope + "\"");
+            for (var i = 0; i < matches.Count; i++)
+            {
+                HostLog.Write("UIA interesting match scope=\"" + scope + "\" index=" + i + " " +
+                    DescribeElement(matches[i]));
+                HostLog.Write("UIA interesting path scope=\"" + scope + "\" index=" + i + " " +
+                    BuildPath(root, matches[i]));
+            }
+
+            HostLog.Write("UIA interesting paths end. scope=\"" + scope + "\"");
+        }
+
         private static void FindInterestingDescendants(AutomationElement element, TreeWalker walker, int depth,
             ref List<AutomationElement> matches, HashSet<string> visitedRuntimeIds)
         {
-            if (element == null || depth > MaxRawDepth || matches.Count >= MaxInterestingMatches)
+            FindInterestingDescendants(element, walker, depth, ref matches, visitedRuntimeIds, MaxRawDepth);
+        }
+
+        private static void FindInterestingDescendants(AutomationElement element, TreeWalker walker, int depth,
+            ref List<AutomationElement> matches, HashSet<string> visitedRuntimeIds, int maxDepth)
+        {
+            if (element == null || depth > maxDepth || matches.Count >= MaxInterestingMatches)
             {
                 return;
             }
@@ -193,7 +251,7 @@ namespace X3LaptopCompanion
 
             while (child != null && matches.Count < MaxInterestingMatches)
             {
-                FindInterestingDescendants(child, walker, depth + 1, ref matches, visitedRuntimeIds);
+                FindInterestingDescendants(child, walker, depth + 1, ref matches, visitedRuntimeIds, maxDepth);
                 try
                 {
                     child = walker.GetNextSibling(child);
@@ -203,6 +261,58 @@ namespace X3LaptopCompanion
                     return;
                 }
             }
+        }
+
+        private static void FindEmbeddedBrowserRoots(AutomationElement element, TreeWalker walker, int depth,
+            List<AutomationElement> roots, HashSet<string> visitedRuntimeIds)
+        {
+            if (element == null || depth > MaxEmbeddedBrowserSearchDepth || roots.Count >= MaxEmbeddedBrowserRoots)
+            {
+                return;
+            }
+
+            if (IsEmbeddedBrowserRoot(element))
+            {
+                var runtimeId = GetRuntimeIdKey(element);
+                if (visitedRuntimeIds.Add(runtimeId))
+                {
+                    roots.Add(element);
+                }
+            }
+
+            AutomationElement child;
+            try
+            {
+                child = walker.GetFirstChild(element);
+            }
+            catch
+            {
+                return;
+            }
+
+            while (child != null && roots.Count < MaxEmbeddedBrowserRoots)
+            {
+                FindEmbeddedBrowserRoots(child, walker, depth + 1, roots, visitedRuntimeIds);
+                try
+                {
+                    child = walker.GetNextSibling(child);
+                }
+                catch
+                {
+                    return;
+                }
+            }
+        }
+
+        private static bool IsEmbeddedBrowserRoot(AutomationElement element)
+        {
+            var className = Safe(() => element.Current.ClassName);
+            var frameworkId = Safe(() => element.Current.FrameworkId);
+            var controlType = Safe(() => element.Current.ControlType.ProgrammaticName);
+
+            return className.IndexOf("EmbeddedBrowserTabRootView", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                (frameworkId.IndexOf("Chrome", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    controlType.IndexOf("Pane", StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
         private static bool IsInterestingElement(AutomationElement element)
