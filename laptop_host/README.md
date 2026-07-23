@@ -12,8 +12,10 @@
 
 - Scans for the X3 companion GATT service.
 - Subscribes to device-command notifications.
-- Sends best-effort Teams presence status to the X3.
-- Handles `ToggleMute` by focusing Teams when possible and sending `Ctrl+Shift+M`.
+- Sends best-effort Teams presence, microphone, and camera status to the X3.
+- Handles `ToggleMute` by posting `Ctrl+Shift+M` directly to the Teams window.
+- The GUI can also post Teams shortcuts for speaker (`Ctrl+Shift+U`),
+  raise/lower hand (`Ctrl+Shift+K`), and video (`Ctrl+Shift+O`).
 - Includes a test mode that keeps BLE active and sends simulated Teams,
   microphone, camera, and status-message values to the X3.
 - Includes a Teams dry-run mode that keeps BLE active and acknowledges X3 mute
@@ -21,8 +23,8 @@
 - Writes a diagnostic log to `%LOCALAPPDATA%\X3LaptopCompanion\host.log`.
   Use the `Open Log` button or tray menu item to jump to it.
 
-Microphone and camera state detection are still placeholders and currently report
-`Unknown`.
+Microphone status is detected from active Teams capture sessions through WASAPI.
+Camera status is detected from the Windows webcam consent-store timestamps.
 
 ## Build
 
