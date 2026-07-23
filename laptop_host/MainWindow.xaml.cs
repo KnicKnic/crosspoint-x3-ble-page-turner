@@ -10,6 +10,7 @@ namespace X3LaptopCompanion
     {
         private readonly TeamsController teamsController = new TeamsController();
         private readonly MediaStatusSensor mediaStatusSensor = new MediaStatusSensor();
+        private readonly UiaWindowDumper uiaWindowDumper = new UiaWindowDumper();
         private readonly CompanionConnectionService connectionService = new CompanionConnectionService();
         private readonly DispatcherTimer statusTimer = new DispatcherTimer();
 
@@ -29,6 +30,7 @@ namespace X3LaptopCompanion
         private bool isTeamsDryRun;
         private string teamsModeText = "Live Teams";
         private string commandTargetProcessIdText = string.Empty;
+        private string windowDumpTargetText = string.Empty;
         private ushort? lastToggleMuteButtonSequence;
         private ushort simulatedButtonSequence = 0xFF00;
         private bool wasBleConnected;
@@ -194,6 +196,18 @@ namespace X3LaptopCompanion
             }
         }
 
+        public string WindowDumpTargetText
+        {
+            get { return windowDumpTargetText; }
+            set
+            {
+                if (SetField(ref windowDumpTargetText, value, nameof(WindowDumpTargetText)))
+                {
+                    HostLog.Write("UIA dump target text changed. value=\"" + value + "\"");
+                }
+            }
+        }
+
         public string DetailText
         {
             get { return detailText; }
@@ -300,6 +314,16 @@ namespace X3LaptopCompanion
             SendTeamsCommandFromUi(TeamsCommand.ToggleVideo);
         }
 
+        private void DumpWindow_Click(object sender, RoutedEventArgs e)
+        {
+            DumpWindow();
+        }
+
+        private void ListWindows_Click(object sender, RoutedEventArgs e)
+        {
+            ListWindows();
+        }
+
         private void CycleTestMicrophone_Click(object sender, RoutedEventArgs e)
         {
             testMicrophone = NextTriState(testMicrophone);
@@ -328,6 +352,45 @@ namespace X3LaptopCompanion
                 FileName = "explorer.exe",
                 Arguments = "/select,\"" + logPath + "\"",
                 UseShellExecute = true
+            });
+        }
+
+        private void DumpWindow()
+        {
+            var target = WindowDumpTargetText;
+            if (string.IsNullOrWhiteSpace(target))
+            {
+                DetailText = "Enter a window target before dumping.";
+                HostLog.Write("UIA dump skipped; target is blank.");
+                return;
+            }
+
+            DetailText = "UIA dump queued. Use Open Log to inspect it.";
+            HostLog.Write("UIA dump requested. target=\"" + target + "\"");
+            _ = Task.Run(() =>
+            {
+                var dumped = uiaWindowDumper.DumpWindow(target);
+                Dispatcher.Invoke(() =>
+                {
+                    DetailText = dumped
+                        ? "UIA dump written to the log."
+                        : "UIA dump target was not found. Use List Windows to discover a target.";
+                });
+            });
+        }
+
+        private void ListWindows()
+        {
+            var filter = WindowDumpTargetText;
+            DetailText = "Window list queued. Use Open Log to inspect it.";
+            HostLog.Write("UIA window list requested. filter=\"" + filter + "\"");
+            _ = Task.Run(() =>
+            {
+                uiaWindowDumper.ListWindows(filter);
+                Dispatcher.Invoke(() =>
+                {
+                    DetailText = "Window list written to the log.";
+                });
             });
         }
 

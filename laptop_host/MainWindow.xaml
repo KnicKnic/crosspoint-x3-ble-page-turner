@@ -6,9 +6,9 @@
         xmlns:local="clr-namespace:X3LaptopCompanion"
         mc:Ignorable="d"
         Title="X3 Laptop Companion"
-        Height="580"
+        Height="660"
         Width="620"
-        MinHeight="560"
+        MinHeight="640"
         MinWidth="560"
         WindowStartupLocation="CenterScreen">
     <Grid Margin="24">
@@ -110,6 +110,34 @@
                         <Button Content="Video"
                                 Click="ToggleVideo_Click" />
                     </UniformGrid>
+                </Grid>
+            </GroupBox>
+            <GroupBox Header="UIA window dump"
+                      Margin="0,0,0,10">
+                <Grid Margin="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="120" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="90" />
+                        <ColumnDefinition Width="90" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Text="Window"
+                               VerticalAlignment="Center"
+                               Margin="0,0,8,0" />
+                    <TextBox Grid.Column="1"
+                             Text="{Binding WindowDumpTargetText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                             Margin="0,0,8,0" />
+                    <Button Grid.Column="2"
+                            Content="Dump"
+                            Margin="0,0,8,0"
+                            Click="DumpWindow_Click" />
+                    <Button Grid.Column="3"
+                            Content="List"
+                            Click="ListWindows_Click" />
                 </Grid>
             </GroupBox>
             <GroupBox Header="Test status"
