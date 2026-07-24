@@ -644,7 +644,7 @@ namespace X3LaptopCompanion
 
             HostLog.Write(name + " invoked in Teams.");
             DetailText = name + " invoked in Teams.";
-            _ = RefreshAndSendCurrentStatusAfterInvokeAsync();
+            _ = RefreshAndSendCurrentStatusAfterInvokeAsync(name);
         }
 
         private void EnsureAudioProcessCacheForCommand(int? explicitPid)
@@ -664,23 +664,31 @@ namespace X3LaptopCompanion
             mediaStatusSensor.GetMicrophoneState(teamsProcessIds);
         }
 
-        private async Task RefreshAndSendCurrentStatusAfterInvokeAsync()
+        private async Task RefreshAndSendCurrentStatusAfterInvokeAsync(string commandName)
         {
-            await Task.Delay(500);
+            await Task.Delay(50);
             Dispatcher.Invoke(() =>
             {
-                var snapshot = ReadTeamsMeetingSnapshot();
+                HostLog.Write("Post-command Teams state refresh starting. command=" + commandName +
+                    " delayMs=50");
+                var snapshot = ReadTeamsMeetingSnapshot(refreshAudioProcessCache: false);
                 ApplyTeamsSnapshotToUi(snapshot);
                 QueueHostStatusIfChanged(snapshot.TeamsDetected, snapshot.MeetingDetected, snapshot.MeetingName,
                     snapshot.Microphone,
-                    snapshot.Camera, snapshot.Hand, StatusMessageForSnapshot(snapshot), "post-command refresh");
+                    snapshot.Camera, snapshot.Hand, StatusMessageForSnapshot(snapshot),
+                    "post-command refresh 50ms");
             });
         }
 
         private TeamsMeetingSnapshot ReadTeamsMeetingSnapshot()
         {
+            return ReadTeamsMeetingSnapshot(refreshAudioProcessCache: true);
+        }
+
+        private TeamsMeetingSnapshot ReadTeamsMeetingSnapshot(bool refreshAudioProcessCache)
+        {
             var teamsProcessIds = teamsController.TeamsProcessIds;
-            if (teamsProcessIds.Count > 0)
+            if (refreshAudioProcessCache && teamsProcessIds.Count > 0)
             {
                 // WASAPI is no longer used as the mute source of truth, but it still gives us the Teams audio PID.
                 // That PID usually points at a hosted process whose parent owns the meeting window we need to scan.
