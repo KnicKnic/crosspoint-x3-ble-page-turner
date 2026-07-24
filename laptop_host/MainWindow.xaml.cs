@@ -539,7 +539,6 @@ namespace X3LaptopCompanion
         {
             var name = TeamsController.CommandName(command);
             HostLog.Write(name + " requested.");
-            RefreshTeamsPresence();
             if (IsTeamsDryRun)
             {
                 TeamsText = "Dry run";
@@ -551,6 +550,7 @@ namespace X3LaptopCompanion
             }
 
             var explicitPid = ParseCommandTargetProcessId();
+            EnsureAudioProcessCacheForCommand(explicitPid);
             if (!teamsController.TrySendCommand(command, mediaStatusSensor.TeamsAudioProcessIds, explicitPid))
             {
                 HostLog.Write(name + " failed; Teams UIA control not found or not invokable.");
@@ -566,13 +566,32 @@ namespace X3LaptopCompanion
             _ = RefreshAndSendCurrentStatusAfterInvokeAsync();
         }
 
+        private void EnsureAudioProcessCacheForCommand(int? explicitPid)
+        {
+            if (explicitPid.HasValue || mediaStatusSensor.TeamsAudioProcessIds.Count > 0)
+            {
+                return;
+            }
+
+            var teamsProcessIds = teamsController.TeamsProcessIds;
+            if (teamsProcessIds.Count == 0)
+            {
+                return;
+            }
+
+            HostLog.Write("Teams command refreshing WASAPI audio PID cache before UIA target search.");
+            mediaStatusSensor.GetMicrophoneState(teamsProcessIds);
+        }
+
         private async Task RefreshAndSendCurrentStatusAfterInvokeAsync()
         {
             await Task.Delay(500);
             Dispatcher.Invoke(() =>
             {
-                RefreshTeamsPresence();
-                SendCurrentHostStatus();
+                var snapshot = ReadTeamsMeetingSnapshot();
+                ApplyTeamsSnapshotToUi(snapshot);
+                QueueHostStatusIfChanged(snapshot.TeamsDetected, snapshot.Microphone, snapshot.Camera,
+                    StatusMessageForSnapshot(snapshot), "post-command refresh");
             });
         }
 

@@ -47,6 +47,9 @@ namespace X3LaptopCompanion
         private static readonly string[] MicrophoneButtonNames = { "Mute mic", "Unmute mic" };
         private static readonly string[] CameraButtonNames = { "Turn camera on", "Turn camera off" };
         private static readonly string[] HandButtonNames = { "Raise your hand", "Lower your hand" };
+        private IntPtr cachedMeetingWindowHandle = IntPtr.Zero;
+        private int cachedMeetingTargetProcessId;
+        private string cachedMeetingTargetProcessName = string.Empty;
 
         public bool IsTeamsRunning
         {
@@ -98,7 +101,7 @@ namespace X3LaptopCompanion
             // Teams is a WebView/Chromium surface and it rerenders the meeting toolbar often. A previously
             // discovered AutomationElement may still exist as a COM wrapper but no longer represent the live button,
             // so every command walks the current tree and invokes the freshly found control.
-            var controls = ReadMeetingControls(context.Root);
+            var controls = context.Controls;
             var button = GetCommandButton(controls, command);
             if (button == null)
             {
@@ -142,7 +145,7 @@ namespace X3LaptopCompanion
 
             // The button names describe the next action, so they also tell us the current meeting state:
             // "Mute mic" means the mic is currently live, while "Unmute mic" means Teams is currently muted.
-            var controls = ReadMeetingControls(context.Root);
+            var controls = context.Controls;
             var microphone = GetMicrophoneState(controls);
             var camera = GetCameraState(controls);
             var hand = GetHandState(controls);
@@ -253,6 +256,11 @@ namespace X3LaptopCompanion
             out MeetingWindowContext context)
         {
             context = null;
+            if (!explicitTargetProcessId.HasValue && TryUseCachedMeetingWindow(out context))
+            {
+                return true;
+            }
+
             var targets = BuildCommandTargets(audioProcessIds).ToList();
             if (explicitTargetProcessId.HasValue)
             {
@@ -290,12 +298,13 @@ namespace X3LaptopCompanion
                         if (score > bestScore)
                         {
                             bestScore = score;
-                            bestContext = new MeetingWindowContext(target, window.Hwnd, root);
+                            bestContext = new MeetingWindowContext(target, window.Hwnd, root, controls);
                         }
 
                         if (controls.HasMeetingControl)
                         {
-                            context = new MeetingWindowContext(target, window.Hwnd, root);
+                            context = new MeetingWindowContext(target, window.Hwnd, root, controls);
+                            RememberMeetingWindow(context);
                             return true;
                         }
                     }
@@ -310,32 +319,79 @@ namespace X3LaptopCompanion
             if (bestContext != null && bestScore > 0)
             {
                 context = bestContext;
+                RememberMeetingWindow(context);
                 return true;
             }
 
             return false;
         }
 
+        private bool TryUseCachedMeetingWindow(out MeetingWindowContext context)
+        {
+            context = null;
+            if (cachedMeetingWindowHandle == IntPtr.Zero || !IsWindow(cachedMeetingWindowHandle))
+            {
+                cachedMeetingWindowHandle = IntPtr.Zero;
+                return false;
+            }
+
+            try
+            {
+                var root = AutomationElement.FromHandle(cachedMeetingWindowHandle);
+                if (root == null)
+                {
+                    cachedMeetingWindowHandle = IntPtr.Zero;
+                    return false;
+                }
+
+                // Cache only the stable top-level window handle. The Teams buttons themselves are deliberately
+                // rediscovered below because WebView rerenders can invalidate saved AutomationElement instances.
+                var controls = ReadMeetingControls(root);
+                HostLog.Write("Teams UIA cached target score. hwnd=0x" +
+                    cachedMeetingWindowHandle.ToInt64().ToString("X") +
+                    " score=" + controls.Score + " " + controls.DescribeState());
+                if (!controls.HasMeetingControl)
+                {
+                    cachedMeetingWindowHandle = IntPtr.Zero;
+                    return false;
+                }
+
+                var target = new CommandTarget(cachedMeetingTargetProcessId, cachedMeetingTargetProcessName,
+                    "cached meeting window");
+                context = new MeetingWindowContext(target, cachedMeetingWindowHandle, root, controls);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                HostLog.Write("Teams UIA cached target failed. hwnd=0x" +
+                    cachedMeetingWindowHandle.ToInt64().ToString("X") + " error=" + ex.Message);
+                cachedMeetingWindowHandle = IntPtr.Zero;
+                return false;
+            }
+        }
+
+        private void RememberMeetingWindow(MeetingWindowContext context)
+        {
+            cachedMeetingWindowHandle = context.Hwnd;
+            cachedMeetingTargetProcessId = context.Target.ProcessId;
+            cachedMeetingTargetProcessName = context.Target.ProcessName;
+            HostLog.Write("Teams UIA meeting window cached. hwnd=0x" +
+                cachedMeetingWindowHandle.ToInt64().ToString("X") + " target=" + DescribeTarget(context.Target));
+        }
+
         private static MeetingControls ReadMeetingControls(AutomationElement root)
         {
             var controls = new MeetingControls();
-            var visited = new HashSet<string>();
             var count = 0;
-            ReadMeetingControls(root, TreeWalker.RawViewWalker, controls, visited, 0, ref count);
+            ReadMeetingControls(root, TreeWalker.RawViewWalker, controls, 0, ref count);
             controls.NodesVisited = count;
             return controls;
         }
 
         private static void ReadMeetingControls(AutomationElement element, TreeWalker walker, MeetingControls controls,
-            HashSet<string> visited, int depth, ref int count)
+            int depth, ref int count)
         {
             if (element == null || depth > MaxMeetingSearchDepth || count >= MaxMeetingSearchNodes)
-            {
-                return;
-            }
-
-            var runtimeId = GetRuntimeIdKey(element);
-            if (!visited.Add(runtimeId))
             {
                 return;
             }
@@ -355,7 +411,7 @@ namespace X3LaptopCompanion
 
             while (child != null && count < MaxMeetingSearchNodes)
             {
-                ReadMeetingControls(child, walker, controls, visited, depth + 1, ref count);
+                ReadMeetingControls(child, walker, controls, depth + 1, ref count);
                 try
                 {
                     child = walker.GetNextSibling(child);
@@ -370,20 +426,20 @@ namespace X3LaptopCompanion
         private static void ReadControl(AutomationElement element, MeetingControls controls)
         {
             var name = Safe(() => element.Current.Name);
-            var automationId = Safe(() => element.Current.AutomationId);
-            var controlType = Safe(() => element.Current.ControlType.ProgrammaticName);
+            var controlType = SafeControlType(element);
             if (string.IsNullOrWhiteSpace(controls.FirstWindowName) &&
-                controlType.IndexOf("Window", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                controlType == ControlType.Window &&
                 !string.IsNullOrWhiteSpace(name))
             {
                 controls.FirstWindowName = name;
             }
 
-            if (!IsButton(element, controlType))
+            if (!IsButton(controlType))
             {
                 return;
             }
 
+            var automationId = Safe(() => element.Current.AutomationId);
             var button = new ButtonInfo(element, name, automationId);
             if (NameEqualsAny(name, MicrophoneButtonNames))
             {
@@ -426,20 +482,21 @@ namespace X3LaptopCompanion
             }
         }
 
-        private static bool IsButton(AutomationElement element, string controlType)
+        private static bool IsButton(ControlType controlType)
+        {
+            return controlType == ControlType.Button;
+        }
+
+        private static ControlType SafeControlType(AutomationElement element)
         {
             try
             {
-                if (element.Current.ControlType == ControlType.Button)
-                {
-                    return true;
-                }
+                return element.Current.ControlType;
             }
             catch
             {
+                return null;
             }
-
-            return controlType.IndexOf("Button", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static bool NameEqualsAny(string name, IEnumerable<string> expectedNames)
@@ -766,18 +823,6 @@ namespace X3LaptopCompanion
             }
         }
 
-        private static string GetRuntimeIdKey(AutomationElement element)
-        {
-            try
-            {
-                return string.Join(".", element.GetRuntimeId() ?? Array.Empty<int>());
-            }
-            catch
-            {
-                return element.GetHashCode().ToString(CultureInfo.InvariantCulture);
-            }
-        }
-
         private static string Safe(Func<string> read)
         {
             try
@@ -795,6 +840,9 @@ namespace X3LaptopCompanion
 
         [DllImport("user32.dll")]
         private static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsWindow(IntPtr hWnd);
 
         [DllImport("user32.dll")]
         private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out int lpdwProcessId);
@@ -838,16 +886,19 @@ namespace X3LaptopCompanion
 
         private sealed class MeetingWindowContext
         {
-            public MeetingWindowContext(CommandTarget target, IntPtr hwnd, AutomationElement root)
+            public MeetingWindowContext(CommandTarget target, IntPtr hwnd, AutomationElement root,
+                MeetingControls controls)
             {
                 Target = target;
                 Hwnd = hwnd;
                 Root = root;
+                Controls = controls;
             }
 
             public CommandTarget Target { get; }
             public IntPtr Hwnd { get; }
             public AutomationElement Root { get; }
+            public MeetingControls Controls { get; }
         }
 
         private sealed class WindowCandidate
