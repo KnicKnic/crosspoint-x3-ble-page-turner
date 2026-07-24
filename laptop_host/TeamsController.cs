@@ -79,6 +79,7 @@ namespace X3LaptopCompanion
         public bool TrySendCommand(TeamsCommand command, IReadOnlyCollection<int> audioProcessIds,
             int? explicitTargetProcessId)
         {
+            var stopwatch = Stopwatch.StartNew();
             if (command == TeamsCommand.ToggleSpeaker)
             {
                 HostLog.Write("Teams command skipped. command=" + CommandName(command) +
@@ -86,44 +87,37 @@ namespace X3LaptopCompanion
                 return false;
             }
 
-            if (!TryFindMeetingWindow(audioProcessIds, explicitTargetProcessId, out var context))
+            if (!TryFindCommandButtonTarget(command, audioProcessIds, explicitTargetProcessId, out var context,
+                    out var button))
             {
-                HostLog.Write("Teams command failed; no Teams meeting window with UIA controls was found. command=" +
-                    CommandName(command));
+                HostLog.Write("Teams command failed; no current UIA button was found. command=" +
+                    CommandName(command) + " elapsedMs=" + stopwatch.ElapsedMilliseconds);
                 return false;
             }
 
-            HostLog.Write("Teams command UIA search. command=" + CommandName(command) +
+            HostLog.Write("Teams command UIA button found. command=" + CommandName(command) +
                 " target=" + DescribeTarget(context.Target) +
                 " hwnd=0x" + context.Hwnd.ToInt64().ToString("X") +
-                " title=\"" + GetWindowTitle(context.Hwnd) + "\"");
-
-            // Teams is a WebView/Chromium surface and it rerenders the meeting toolbar often. A previously
-            // discovered AutomationElement may still exist as a COM wrapper but no longer represent the live button,
-            // so every command walks the current tree and invokes the freshly found control.
-            var controls = context.Controls;
-            var button = GetCommandButton(controls, command);
-            if (button == null)
-            {
-                HostLog.Write("Teams command failed; matching button was not found. command=" + CommandName(command) +
-                    " controls=" + controls.DescribeState());
-                return false;
-            }
+                " title=\"" + GetWindowTitle(context.Hwnd) + "\"" +
+                " buttonName=\"" + button.Name + "\"" +
+                " automationId=\"" + button.AutomationId + "\"" +
+                " elapsedMs=" + stopwatch.ElapsedMilliseconds);
 
             HostLog.Write("Teams command invoking UIA button. command=" + CommandName(command) +
                 " buttonName=\"" + button.Name + "\"" +
-                " automationId=\"" + button.AutomationId + "\"" +
-                " currentStateBeforeInvoke=" + controls.DescribeState());
+                " automationId=\"" + button.AutomationId + "\"");
 
             if (!TryInvokeButton(button.Element, button.Name))
             {
                 HostLog.Write("Teams command failed; button did not support InvokePattern. command=" +
-                    CommandName(command) + " buttonName=\"" + button.Name + "\"");
+                    CommandName(command) + " buttonName=\"" + button.Name + "\"" +
+                    " elapsedMs=" + stopwatch.ElapsedMilliseconds);
                 return false;
             }
 
             HostLog.Write("Teams command invoked. command=" + CommandName(command) +
-                " buttonName=\"" + button.Name + "\" target=" + DescribeTarget(context.Target));
+                " buttonName=\"" + button.Name + "\" target=" + DescribeTarget(context.Target) +
+                " elapsedMs=" + stopwatch.ElapsedMilliseconds);
             return true;
         }
 
@@ -173,21 +167,6 @@ namespace X3LaptopCompanion
                     return "Toggle video";
                 default:
                     return command.ToString();
-            }
-        }
-
-        private static ButtonInfo GetCommandButton(MeetingControls controls, TeamsCommand command)
-        {
-            switch (command)
-            {
-                case TeamsCommand.ToggleMute:
-                    return controls.MuteMicButton ?? controls.UnmuteMicButton;
-                case TeamsCommand.ToggleHand:
-                    return controls.RaiseHandButton ?? controls.LowerHandButton;
-                case TeamsCommand.ToggleVideo:
-                    return controls.TurnCameraOnButton ?? controls.TurnCameraOffButton;
-                default:
-                    return null;
             }
         }
 
@@ -326,6 +305,221 @@ namespace X3LaptopCompanion
             return false;
         }
 
+        private bool TryFindCommandButtonTarget(TeamsCommand command, IReadOnlyCollection<int> audioProcessIds,
+            int? explicitTargetProcessId, out MeetingWindowContext context, out ButtonInfo button)
+        {
+            context = null;
+            button = null;
+            if (!explicitTargetProcessId.HasValue &&
+                TryFindCommandButtonInCachedWindow(command, out context, out button))
+            {
+                return true;
+            }
+
+            var targets = BuildCommandTargets(audioProcessIds).ToList();
+            if (explicitTargetProcessId.HasValue)
+            {
+                targets.Insert(0, BuildExplicitTarget(explicitTargetProcessId.Value));
+            }
+
+            HostLog.Write("Teams command target search. command=" + CommandName(command) +
+                " explicitPid=" +
+                (explicitTargetProcessId.HasValue ? explicitTargetProcessId.Value.ToString(CultureInfo.InvariantCulture) : "(none)") +
+                " audioPids=" + FormatIds(audioProcessIds) + " candidates=" +
+                string.Join("; ", targets.Select(DescribeTarget)));
+
+            foreach (var target in targets)
+            {
+                foreach (var window in FindCandidateWindows(target.ProcessId))
+                {
+                    try
+                    {
+                        var root = AutomationElement.FromHandle(window.Hwnd);
+                        if (root == null)
+                        {
+                            continue;
+                        }
+
+                        if (!TryFindCommandButton(root, command, out button, out var method))
+                        {
+                            HostLog.Write("Teams command target probe. " + DescribeTarget(target) +
+                                " hwnd=0x" + window.Hwnd.ToInt64().ToString("X") +
+                                " title=\"" + window.Title + "\" hosted=" + window.HostsRequestedProcess +
+                                " buttonFound=False.");
+                            continue;
+                        }
+
+                        context = new MeetingWindowContext(target, window.Hwnd, root, null);
+                        RememberMeetingWindow(context);
+                        HostLog.Write("Teams command target selected. command=" + CommandName(command) +
+                            " method=" + method + " " + DescribeTarget(target) +
+                            " hwnd=0x" + window.Hwnd.ToInt64().ToString("X") +
+                            " title=\"" + window.Title + "\" hosted=" + window.HostsRequestedProcess +
+                            " buttonName=\"" + button.Name + "\".");
+                        return true;
+                    }
+                    catch (Exception ex)
+                    {
+                        HostLog.Write("Teams command target probe failed. " + DescribeTarget(target) +
+                            " hwnd=0x" + window.Hwnd.ToInt64().ToString("X") + " error=" + ex.Message);
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private bool TryFindCommandButtonInCachedWindow(TeamsCommand command, out MeetingWindowContext context,
+            out ButtonInfo button)
+        {
+            context = null;
+            button = null;
+            if (cachedMeetingWindowHandle == IntPtr.Zero || !IsWindow(cachedMeetingWindowHandle))
+            {
+                cachedMeetingWindowHandle = IntPtr.Zero;
+                return false;
+            }
+
+            try
+            {
+                var root = AutomationElement.FromHandle(cachedMeetingWindowHandle);
+                if (root == null)
+                {
+                    cachedMeetingWindowHandle = IntPtr.Zero;
+                    return false;
+                }
+
+                // Commands only need one live button. Cache the meeting window, then use UIA's native FindFirst
+                // before falling back to a short-circuit tree walk; avoid the full status snapshot on this path.
+                if (!TryFindCommandButton(root, command, out button, out var method))
+                {
+                    HostLog.Write("Teams command cached target missed. command=" + CommandName(command) +
+                        " hwnd=0x" + cachedMeetingWindowHandle.ToInt64().ToString("X"));
+                    cachedMeetingWindowHandle = IntPtr.Zero;
+                    return false;
+                }
+
+                var target = new CommandTarget(cachedMeetingTargetProcessId, cachedMeetingTargetProcessName,
+                    "cached meeting window");
+                context = new MeetingWindowContext(target, cachedMeetingWindowHandle, root, null);
+                HostLog.Write("Teams command cached target hit. command=" + CommandName(command) +
+                    " method=" + method +
+                    " hwnd=0x" + cachedMeetingWindowHandle.ToInt64().ToString("X") +
+                    " buttonName=\"" + button.Name + "\" automationId=\"" + button.AutomationId + "\"");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                HostLog.Write("Teams command cached target failed. hwnd=0x" +
+                    cachedMeetingWindowHandle.ToInt64().ToString("X") + " error=" + ex.Message);
+                cachedMeetingWindowHandle = IntPtr.Zero;
+                return false;
+            }
+        }
+
+        private static bool TryFindCommandButton(AutomationElement root, TeamsCommand command, out ButtonInfo button,
+            out string method)
+        {
+            button = null;
+            method = string.Empty;
+            foreach (var name in GetCommandButtonNames(command))
+            {
+                try
+                {
+                    var condition = new AndCondition(
+                        new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button),
+                        new PropertyCondition(AutomationElement.NameProperty, name));
+                    var element = root.FindFirst(TreeScope.Descendants, condition);
+                    if (element != null)
+                    {
+                        button = CreateButtonInfo(element);
+                        method = "FindFirst:" + name;
+                        return true;
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            var count = 0;
+            if (TryFindCommandButtonByWalk(root, TreeWalker.RawViewWalker, GetCommandButtonNames(command), 0,
+                    ref count, out button))
+            {
+                method = "RawViewWalk:nodes=" + count;
+                return true;
+            }
+
+            method = "not-found:nodes=" + count;
+            return false;
+        }
+
+        private static bool TryFindCommandButtonByWalk(AutomationElement element, TreeWalker walker,
+            IReadOnlyCollection<string> names, int depth, ref int count, out ButtonInfo button)
+        {
+            button = null;
+            if (element == null || depth > MaxMeetingSearchDepth || count >= MaxMeetingSearchNodes)
+            {
+                return false;
+            }
+
+            count++;
+            var controlType = SafeControlType(element);
+            if (IsButton(controlType))
+            {
+                var name = Safe(() => element.Current.Name);
+                if (NameEqualsAny(name, names))
+                {
+                    button = CreateButtonInfo(element, name);
+                    return true;
+                }
+            }
+
+            AutomationElement child;
+            try
+            {
+                child = walker.GetFirstChild(element);
+            }
+            catch
+            {
+                return false;
+            }
+
+            while (child != null && count < MaxMeetingSearchNodes)
+            {
+                if (TryFindCommandButtonByWalk(child, walker, names, depth + 1, ref count, out button))
+                {
+                    return true;
+                }
+
+                try
+                {
+                    child = walker.GetNextSibling(child);
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            return false;
+        }
+
+        private static IReadOnlyCollection<string> GetCommandButtonNames(TeamsCommand command)
+        {
+            switch (command)
+            {
+                case TeamsCommand.ToggleMute:
+                    return MicrophoneButtonNames;
+                case TeamsCommand.ToggleHand:
+                    return HandButtonNames;
+                case TeamsCommand.ToggleVideo:
+                    return CameraButtonNames;
+                default:
+                    return Array.Empty<string>();
+            }
+        }
+
         private bool TryUseCachedMeetingWindow(out MeetingWindowContext context)
         {
             context = null;
@@ -439,8 +633,7 @@ namespace X3LaptopCompanion
                 return;
             }
 
-            var automationId = Safe(() => element.Current.AutomationId);
-            var button = new ButtonInfo(element, name, automationId);
+            var button = CreateButtonInfo(element, name);
             if (NameEqualsAny(name, MicrophoneButtonNames))
             {
                 if (NameEquals(name, "Mute mic"))
@@ -485,6 +678,16 @@ namespace X3LaptopCompanion
         private static bool IsButton(ControlType controlType)
         {
             return controlType == ControlType.Button;
+        }
+
+        private static ButtonInfo CreateButtonInfo(AutomationElement element)
+        {
+            return CreateButtonInfo(element, Safe(() => element.Current.Name));
+        }
+
+        private static ButtonInfo CreateButtonInfo(AutomationElement element, string name)
+        {
+            return new ButtonInfo(element, name, Safe(() => element.Current.AutomationId));
         }
 
         private static ControlType SafeControlType(AutomationElement element)

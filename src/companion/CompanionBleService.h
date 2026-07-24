@@ -17,8 +17,11 @@ class CompanionBleService {
 
   struct HostStatus {
     bool teamsDetected = false;
+    bool meetingDetected = false;
+    std::string meetingName;
     uint8_t microphone = 0;
     uint8_t camera = 0;
+    uint8_t hand = 0;
     std::string message;
   };
 
@@ -42,8 +45,11 @@ class CompanionBleService {
   void onHostDisconnected();
   void onConnParamsUpdated(uint16_t interval, uint16_t latency, uint16_t timeout);
   void onHostTeamsStateWritten(NimBLECharacteristic* characteristic);
+  void onHostMeetingStateWritten(NimBLECharacteristic* characteristic);
+  void onHostMeetingNameWritten(NimBLECharacteristic* characteristic);
   void onHostMicrophoneStateWritten(NimBLECharacteristic* characteristic);
   void onHostCameraStateWritten(NimBLECharacteristic* characteristic);
+  void onHostHandStateWritten(NimBLECharacteristic* characteristic);
   void onHostStatusMessageWritten(NimBLECharacteristic* characteristic);
   void onButtonEventSubscribed(bool subscribed);
   void scheduleAdvertisingRestart(const char* reason, unsigned long delayMs);
@@ -64,8 +70,11 @@ class CompanionBleService {
 
   NimBLEServer* server = nullptr;
   NimBLECharacteristic* hostTeamsStateCharacteristic = nullptr;
+  NimBLECharacteristic* hostMeetingStateCharacteristic = nullptr;
+  NimBLECharacteristic* hostMeetingNameCharacteristic = nullptr;
   NimBLECharacteristic* hostMicrophoneStateCharacteristic = nullptr;
   NimBLECharacteristic* hostCameraStateCharacteristic = nullptr;
+  NimBLECharacteristic* hostHandStateCharacteristic = nullptr;
   NimBLECharacteristic* hostStatusMessageCharacteristic = nullptr;
   NimBLECharacteristic* buttonEventCharacteristic = nullptr;
   NimBLECharacteristic* deviceInfoCharacteristic = nullptr;

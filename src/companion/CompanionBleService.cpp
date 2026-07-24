@@ -35,8 +35,11 @@ constexpr uint16_t BLE_CONN_TIMEOUT_IDLE = 1000;           // 10 s
 
 enum class HostStateField : uint8_t {
   Teams,
+  Meeting,
+  MeetingName,
   Microphone,
   Camera,
+  Hand,
   Message,
 };
 
@@ -44,10 +47,16 @@ const char* hostStateFieldName(HostStateField field) {
   switch (field) {
     case HostStateField::Teams:
       return "teams";
+    case HostStateField::Meeting:
+      return "meeting";
+    case HostStateField::MeetingName:
+      return "meeting_name";
     case HostStateField::Microphone:
       return "microphone";
     case HostStateField::Camera:
       return "camera";
+    case HostStateField::Hand:
+      return "hand";
     case HostStateField::Message:
       return "message";
   }
@@ -125,11 +134,20 @@ class HostStateCallbacks : public NimBLECharacteristicCallbacks {
       case HostStateField::Teams:
         g_service->onHostTeamsStateWritten(characteristic);
         break;
+      case HostStateField::Meeting:
+        g_service->onHostMeetingStateWritten(characteristic);
+        break;
+      case HostStateField::MeetingName:
+        g_service->onHostMeetingNameWritten(characteristic);
+        break;
       case HostStateField::Microphone:
         g_service->onHostMicrophoneStateWritten(characteristic);
         break;
       case HostStateField::Camera:
         g_service->onHostCameraStateWritten(characteristic);
+        break;
+      case HostStateField::Hand:
+        g_service->onHostHandStateWritten(characteristic);
         break;
       case HostStateField::Message:
         g_service->onHostStatusMessageWritten(characteristic);
@@ -157,8 +175,11 @@ class ButtonEventCallbacks : public NimBLECharacteristicCallbacks {
 
 CompanionServerCallbacks serverCallbacks;
 HostStateCallbacks teamsStateCallbacks(HostStateField::Teams);
+HostStateCallbacks meetingStateCallbacks(HostStateField::Meeting);
+HostStateCallbacks meetingNameCallbacks(HostStateField::MeetingName);
 HostStateCallbacks microphoneStateCallbacks(HostStateField::Microphone);
 HostStateCallbacks cameraStateCallbacks(HostStateField::Camera);
+HostStateCallbacks handStateCallbacks(HostStateField::Hand);
 HostStateCallbacks statusMessageCallbacks(HostStateField::Message);
 ButtonEventCallbacks buttonEventCallbacks;
 }  // namespace
@@ -214,10 +235,16 @@ bool CompanionBleService::begin() {
     constexpr uint32_t stateProperties = NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR;
     hostTeamsStateCharacteristic =
         service->createCharacteristic(CompanionProtocol::HOST_TEAMS_STATE_UUID, stateProperties, 1);
+    hostMeetingStateCharacteristic =
+        service->createCharacteristic(CompanionProtocol::HOST_MEETING_STATE_UUID, stateProperties, 1);
+    hostMeetingNameCharacteristic = service->createCharacteristic(
+        CompanionProtocol::HOST_MEETING_NAME_UUID, stateProperties, COMPANION_STATUS_MESSAGE_MAX_LEN);
     hostMicrophoneStateCharacteristic =
         service->createCharacteristic(CompanionProtocol::HOST_MICROPHONE_STATE_UUID, stateProperties, 1);
     hostCameraStateCharacteristic =
         service->createCharacteristic(CompanionProtocol::HOST_CAMERA_STATE_UUID, stateProperties, 1);
+    hostHandStateCharacteristic =
+        service->createCharacteristic(CompanionProtocol::HOST_HAND_STATE_UUID, stateProperties, 1);
     hostStatusMessageCharacteristic = service->createCharacteristic(
         CompanionProtocol::HOST_STATUS_MESSAGE_UUID, stateProperties, COMPANION_STATUS_MESSAGE_MAX_LEN);
     buttonEventCharacteristic =
@@ -225,10 +252,12 @@ bool CompanionBleService::begin() {
     deviceInfoCharacteristic =
         service->createCharacteristic(CompanionProtocol::DEVICE_INFO_UUID, NIMBLE_PROPERTY::READ, 2);
 
-    if (!hostTeamsStateCharacteristic || !hostMicrophoneStateCharacteristic || !hostCameraStateCharacteristic ||
+    if (!hostTeamsStateCharacteristic || !hostMeetingStateCharacteristic || !hostMeetingNameCharacteristic ||
+        !hostMicrophoneStateCharacteristic || !hostCameraStateCharacteristic || !hostHandStateCharacteristic ||
         !hostStatusMessageCharacteristic || !buttonEventCharacteristic || !deviceInfoCharacteristic) {
-      LOG_ERR("COMP", "Failed to create companion characteristics teams=%p mic=%p camera=%p msg=%p button=%p info=%p",
-              hostTeamsStateCharacteristic, hostMicrophoneStateCharacteristic, hostCameraStateCharacteristic,
+      LOG_ERR("COMP", "Failed to create companion characteristics teams=%p meeting=%p meetingName=%p mic=%p camera=%p hand=%p msg=%p button=%p info=%p",
+              hostTeamsStateCharacteristic, hostMeetingStateCharacteristic, hostMeetingNameCharacteristic,
+              hostMicrophoneStateCharacteristic, hostCameraStateCharacteristic, hostHandStateCharacteristic,
               hostStatusMessageCharacteristic, buttonEventCharacteristic, deviceInfoCharacteristic);
       BluetoothDiagnostics::record("companion_characteristic_create_failed");
       if (ownsBluetoothStack) {
@@ -240,8 +269,11 @@ bool CompanionBleService::begin() {
     }
 
     hostTeamsStateCharacteristic->setCallbacks(&teamsStateCallbacks);
+    hostMeetingStateCharacteristic->setCallbacks(&meetingStateCallbacks);
+    hostMeetingNameCharacteristic->setCallbacks(&meetingNameCallbacks);
     hostMicrophoneStateCharacteristic->setCallbacks(&microphoneStateCallbacks);
     hostCameraStateCharacteristic->setCallbacks(&cameraStateCallbacks);
+    hostHandStateCharacteristic->setCallbacks(&handStateCallbacks);
     hostStatusMessageCharacteristic->setCallbacks(&statusMessageCallbacks);
     buttonEventCharacteristic->setCallbacks(&buttonEventCallbacks);
     if (!server->start()) {
@@ -253,8 +285,11 @@ bool CompanionBleService::begin() {
       ownsBluetoothStack = false;
       server = nullptr;
       hostTeamsStateCharacteristic = nullptr;
+      hostMeetingStateCharacteristic = nullptr;
+      hostMeetingNameCharacteristic = nullptr;
       hostMicrophoneStateCharacteristic = nullptr;
       hostCameraStateCharacteristic = nullptr;
+      hostHandStateCharacteristic = nullptr;
       hostStatusMessageCharacteristic = nullptr;
       buttonEventCharacteristic = nullptr;
       deviceInfoCharacteristic = nullptr;
@@ -279,8 +314,11 @@ bool CompanionBleService::begin() {
       BluetoothHIDManager::getInstance().disable();
       server = nullptr;
       hostTeamsStateCharacteristic = nullptr;
+      hostMeetingStateCharacteristic = nullptr;
+      hostMeetingNameCharacteristic = nullptr;
       hostMicrophoneStateCharacteristic = nullptr;
       hostCameraStateCharacteristic = nullptr;
+      hostHandStateCharacteristic = nullptr;
       hostStatusMessageCharacteristic = nullptr;
       buttonEventCharacteristic = nullptr;
       deviceInfoCharacteristic = nullptr;
@@ -330,8 +368,11 @@ void CompanionBleService::end() {
     BluetoothHIDManager::getInstance().disable();
     server = nullptr;
     hostTeamsStateCharacteristic = nullptr;
+    hostMeetingStateCharacteristic = nullptr;
+    hostMeetingNameCharacteristic = nullptr;
     hostMicrophoneStateCharacteristic = nullptr;
     hostCameraStateCharacteristic = nullptr;
+    hostHandStateCharacteristic = nullptr;
     hostStatusMessageCharacteristic = nullptr;
     buttonEventCharacteristic = nullptr;
     deviceInfoCharacteristic = nullptr;
@@ -560,6 +601,54 @@ void CompanionBleService::onHostTeamsStateWritten(NimBLECharacteristic* characte
   requestIdleConnectionParamsIfReady("teams_state");
 }
 
+void CompanionBleService::onHostMeetingStateWritten(NimBLECharacteristic* characteristic) {
+  if (!characteristic) {
+    return;
+  }
+
+  const std::string value = characteristic->getValue();
+  if (value.empty()) {
+    LOG_INF("COMP", "Ignored empty meeting state write");
+    return;
+  }
+
+  const bool next = value[0] != 0;
+  const bool changed = hostStatus.meetingDetected != next;
+  const bool firstStateWrite = !hostStateReceived;
+  hostStatus.meetingDetected = next;
+  hostStateReceived = true;
+  if (changed || firstStateWrite) {
+    statusChanged = true;
+    LOG_INF("COMP", "Host meeting state=%d", hostStatus.meetingDetected);
+    logStateSnapshot("meeting_state");
+    notifyStatusChanged();
+  }
+  requestIdleConnectionParamsIfReady("meeting_state");
+}
+
+void CompanionBleService::onHostMeetingNameWritten(NimBLECharacteristic* characteristic) {
+  if (!characteristic) {
+    return;
+  }
+
+  std::string next = characteristic->getValue();
+  if (next.size() > COMPANION_STATUS_MESSAGE_MAX_LEN) {
+    next.resize(COMPANION_STATUS_MESSAGE_MAX_LEN);
+  }
+
+  const bool changed = hostStatus.meetingName != next;
+  const bool firstStateWrite = !hostStateReceived;
+  hostStatus.meetingName = next;
+  hostStateReceived = true;
+  if (changed || firstStateWrite) {
+    statusChanged = true;
+    LOG_INF("COMP", "Host meeting name=%s", hostStatus.meetingName.c_str());
+    logStateSnapshot("meeting_name");
+    notifyStatusChanged();
+  }
+  requestIdleConnectionParamsIfReady("meeting_name");
+}
+
 void CompanionBleService::onHostMicrophoneStateWritten(NimBLECharacteristic* characteristic) {
   if (!characteristic) {
     return;
@@ -608,6 +697,31 @@ void CompanionBleService::onHostCameraStateWritten(NimBLECharacteristic* charact
     notifyStatusChanged();
   }
   requestIdleConnectionParamsIfReady("camera_state");
+}
+
+void CompanionBleService::onHostHandStateWritten(NimBLECharacteristic* characteristic) {
+  if (!characteristic) {
+    return;
+  }
+
+  const std::string value = characteristic->getValue();
+  if (value.empty()) {
+    LOG_INF("COMP", "Ignored empty hand state write");
+    return;
+  }
+
+  const uint8_t next = static_cast<uint8_t>(value[0]);
+  const bool changed = hostStatus.hand != next;
+  const bool firstStateWrite = !hostStateReceived;
+  hostStatus.hand = next;
+  hostStateReceived = true;
+  if (changed || firstStateWrite) {
+    statusChanged = true;
+    LOG_INF("COMP", "Host hand state=%u", static_cast<unsigned>(hostStatus.hand));
+    logStateSnapshot("hand_state");
+    notifyStatusChanged();
+  }
+  requestIdleConnectionParamsIfReady("hand_state");
 }
 
 void CompanionBleService::onHostStatusMessageWritten(NimBLECharacteristic* characteristic) {
@@ -721,14 +835,24 @@ bool CompanionBleService::restartAdvertising(const char* reason) {
 
 void CompanionBleService::publishHostStateValues() {
   const uint8_t teams = hostStatus.teamsDetected ? 1 : 0;
+  const uint8_t meeting = hostStatus.meetingDetected ? 1 : 0;
   if (hostTeamsStateCharacteristic) {
     hostTeamsStateCharacteristic->setValue(&teams, sizeof(teams));
+  }
+  if (hostMeetingStateCharacteristic) {
+    hostMeetingStateCharacteristic->setValue(&meeting, sizeof(meeting));
+  }
+  if (hostMeetingNameCharacteristic) {
+    hostMeetingNameCharacteristic->setValue(hostStatus.meetingName);
   }
   if (hostMicrophoneStateCharacteristic) {
     hostMicrophoneStateCharacteristic->setValue(&hostStatus.microphone, sizeof(hostStatus.microphone));
   }
   if (hostCameraStateCharacteristic) {
     hostCameraStateCharacteristic->setValue(&hostStatus.camera, sizeof(hostStatus.camera));
+  }
+  if (hostHandStateCharacteristic) {
+    hostHandStateCharacteristic->setValue(&hostStatus.hand, sizeof(hostStatus.hand));
   }
   if (hostStatusMessageCharacteristic) {
     hostStatusMessageCharacteristic->setValue(hostStatus.message);
@@ -786,8 +910,10 @@ void CompanionBleService::publishButtonEvent(uint8_t buttonId, uint8_t action) {
 
 void CompanionBleService::logStateSnapshot(const char* reason) {
   lastStateLogAtMs = millis();
-  LOG_INF("COMP", "State reason=%s running=%d connected=%d buttonSub=%d stateRx=%d profile=%s teams=%d mic=%u cam=%u heap=%u",
+  LOG_INF("COMP", "State reason=%s running=%d connected=%d buttonSub=%d stateRx=%d profile=%s teams=%d meeting=%d mic=%u cam=%u hand=%u heap=%u",
           reason ? reason : "", running, hostConnected, buttonEventSubscribed, hostStateReceived,
-          profileName(connectionProfile), hostStatus.teamsDetected, static_cast<unsigned>(hostStatus.microphone),
-          static_cast<unsigned>(hostStatus.camera), static_cast<unsigned>(ESP.getFreeHeap()));
+          profileName(connectionProfile), hostStatus.teamsDetected, hostStatus.meetingDetected,
+          static_cast<unsigned>(hostStatus.microphone),
+          static_cast<unsigned>(hostStatus.camera), static_cast<unsigned>(hostStatus.hand),
+          static_cast<unsigned>(ESP.getFreeHeap()));
 }

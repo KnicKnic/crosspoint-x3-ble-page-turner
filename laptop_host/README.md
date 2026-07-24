@@ -12,12 +12,14 @@
 
 - Scans for the X3 companion GATT service.
 - Subscribes to device-command notifications.
-- Sends Teams presence, meeting name, microphone, and camera status to the X3.
+- Sends Teams presence, meeting presence, meeting name, microphone, camera, and
+  hand state to the X3.
 - Finds the active Teams meeting window from the parent of the Teams audio
   process when possible.
 - Handles mute, camera, and raise-hand commands by finding the current Teams UI
-  Automation button and invoking it with `InvokePattern`. The controls are
-  rediscovered for each command because Teams rerenders the meeting toolbar.
+  Automation button and invoking it with `InvokePattern`. The meeting window is
+  cached, but controls are rediscovered for each command because Teams rerenders
+  the meeting toolbar.
 - Speaker toggle is not sent until a matching Teams UI Automation button name is
   identified; keyboard hotkeys are not used.
 - The GUI can dump a selected window's UI Automation tree to the host log.
@@ -26,7 +28,8 @@
   the selected process's RawView subtree and log upward paths for buttons named
   `Unmute`.
 - Includes a test mode that keeps BLE active and sends simulated Teams,
-  microphone, camera, and status-message values to the X3.
+  meeting, microphone, camera, hand, meeting-name, and status-message values to
+  the X3.
 - Includes a Teams dry-run mode that keeps BLE active and acknowledges X3 mute
   commands without focusing or controlling Teams.
 - Writes a diagnostic log to `%LOCALAPPDATA%\X3LaptopCompanion\host.log`.

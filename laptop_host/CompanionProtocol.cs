@@ -11,6 +11,9 @@ namespace X3LaptopCompanion
         public static readonly Guid HostStatusMessageUuid = Guid.Parse("7d2d5f00-778d-4df6-a6d5-7c4e7a000005");
         public static readonly Guid ButtonEventUuid = Guid.Parse("7d2d5f00-778d-4df6-a6d5-7c4e7a000006");
         public static readonly Guid DeviceInfoUuid = Guid.Parse("7d2d5f00-778d-4df6-a6d5-7c4e7a000007");
+        public static readonly Guid HostMeetingStateUuid = Guid.Parse("7d2d5f00-778d-4df6-a6d5-7c4e7a000008");
+        public static readonly Guid HostHandStateUuid = Guid.Parse("7d2d5f00-778d-4df6-a6d5-7c4e7a000009");
+        public static readonly Guid HostMeetingNameUuid = Guid.Parse("7d2d5f00-778d-4df6-a6d5-7c4e7a00000a");
 
         public const byte ProtocolVersion = 1;
     }

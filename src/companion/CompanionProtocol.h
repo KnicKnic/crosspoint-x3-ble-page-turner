@@ -11,6 +11,9 @@ constexpr const char* HOST_CAMERA_STATE_UUID = "7d2d5f00-778d-4df6-a6d5-7c4e7a00
 constexpr const char* HOST_STATUS_MESSAGE_UUID = "7d2d5f00-778d-4df6-a6d5-7c4e7a000005";
 constexpr const char* BUTTON_EVENT_UUID = "7d2d5f00-778d-4df6-a6d5-7c4e7a000006";
 constexpr const char* DEVICE_INFO_UUID = "7d2d5f00-778d-4df6-a6d5-7c4e7a000007";
+constexpr const char* HOST_MEETING_STATE_UUID = "7d2d5f00-778d-4df6-a6d5-7c4e7a000008";
+constexpr const char* HOST_HAND_STATE_UUID = "7d2d5f00-778d-4df6-a6d5-7c4e7a000009";
+constexpr const char* HOST_MEETING_NAME_UUID = "7d2d5f00-778d-4df6-a6d5-7c4e7a00000a";
 
 constexpr uint8_t PROTOCOL_VERSION = 1;
 

@@ -30,8 +30,10 @@ void LaptopCompanionActivity::onEnter() {
   hostConnected = false;
   noHostConnectedSinceMs = 0;
   statusMessage = "Waiting for host";
+  meetingMessage = "Unknown";
   microphoneMessage = "Unknown";
   cameraMessage = "Unknown";
+  handMessage = "Unknown";
 
   auto& service = CompanionBleService::getInstance();
   service.setStatusChangedCallback([this] { requestUpdate(); });
@@ -59,8 +61,12 @@ void LaptopCompanionActivity::loop() {
     const auto hostStatus = service.getHostStatus();
     hostConnected = service.isHostConnected();
     statusMessage = service.getStatusText();
+    meetingMessage = hostStatus.meetingDetected
+                         ? (hostStatus.meetingName.empty() ? std::string("Yes") : hostStatus.meetingName)
+                         : std::string("No");
     microphoneMessage = triStateText(hostStatus.microphone, "Muted", "Live");
     cameraMessage = triStateText(hostStatus.camera, "Off", "Active");
+    handMessage = triStateText(hostStatus.hand, "Lowered", "Raised");
     requestUpdate();
   }
 
@@ -129,15 +135,23 @@ void LaptopCompanionActivity::render(RenderLock&&) {
 
   renderer.drawText(UI_10_FONT_ID, contentX, y, "Teams");
   renderer.drawText(UI_10_FONT_ID, contentX + 150, y, statusMessage.c_str(), true, EpdFontFamily::BOLD);
-  y += 42;
+  y += 36;
+
+  renderer.drawText(UI_10_FONT_ID, contentX, y, "Meeting");
+  renderer.drawText(UI_10_FONT_ID, contentX + 150, y, meetingMessage.c_str(), true, EpdFontFamily::BOLD);
+  y += 36;
 
   renderer.drawText(UI_10_FONT_ID, contentX, y, "Microphone");
   renderer.drawText(UI_10_FONT_ID, contentX + 150, y, microphoneMessage.c_str(), true, EpdFontFamily::BOLD);
-  y += 42;
+  y += 36;
 
   renderer.drawText(UI_10_FONT_ID, contentX, y, "Camera");
   renderer.drawText(UI_10_FONT_ID, contentX + 150, y, cameraMessage.c_str(), true, EpdFontFamily::BOLD);
-  y += 62;
+  y += 36;
+
+  renderer.drawText(UI_10_FONT_ID, contentX, y, "Hand");
+  renderer.drawText(UI_10_FONT_ID, contentX + 150, y, handMessage.c_str(), true, EpdFontFamily::BOLD);
+  y += 50;
 
   const auto wrapped =
       renderer.wrappedText(SMALL_FONT_ID, "Open the WPF host app on Windows, then connect over BLE.", contentWidth, 3);

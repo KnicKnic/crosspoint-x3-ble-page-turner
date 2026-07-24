@@ -16,17 +16,24 @@ namespace X3LaptopCompanion
 
         private string connectionText = "Disconnected";
         private string teamsText = "Waiting for Teams";
+        private string meetingText = "Unknown";
         private string microphoneText = "Unknown";
         private string cameraText = "Unknown";
+        private string handText = "Unknown";
         private bool isTestMode;
         private string testModeText = "Off";
         private bool testTeamsDetected = true;
+        private bool testMeetingDetected;
         private CompanionTriState testMicrophone = CompanionTriState.Unknown;
         private CompanionTriState testCamera = CompanionTriState.Unknown;
+        private CompanionTriState testHand = CompanionTriState.Unknown;
         private string testMessage = "Test status";
+        private string testMeetingName = "Test Meeting";
         private string testTeamsToggleText = "Detected";
+        private string testMeetingToggleText = "No meeting";
         private string testMicrophoneToggleText = "Unknown";
         private string testCameraToggleText = "Unknown";
+        private string testHandToggleText = "Unknown";
         private bool isTeamsDryRun;
         private string teamsModeText = "Live Teams";
         private string commandTargetProcessIdText = string.Empty;
@@ -43,25 +50,35 @@ namespace X3LaptopCompanion
 
         private sealed class HostStatePayload
         {
-            public HostStatePayload(bool teamsDetected, CompanionTriState microphone, CompanionTriState camera, string message)
+            public HostStatePayload(bool teamsDetected, bool meetingDetected, string meetingName,
+                CompanionTriState microphone, CompanionTriState camera, CompanionTriState hand, string message)
             {
                 TeamsDetected = teamsDetected;
+                MeetingDetected = meetingDetected;
+                MeetingName = string.IsNullOrWhiteSpace(meetingName) ? string.Empty : meetingName;
                 Microphone = microphone;
                 Camera = camera;
+                Hand = hand;
                 Message = string.IsNullOrWhiteSpace(message) ? string.Empty : message;
             }
 
             public bool TeamsDetected { get; }
+            public bool MeetingDetected { get; }
+            public string MeetingName { get; }
             public CompanionTriState Microphone { get; }
             public CompanionTriState Camera { get; }
+            public CompanionTriState Hand { get; }
             public string Message { get; }
 
             public bool SameAs(HostStatePayload other)
             {
                 return other != null &&
                     TeamsDetected == other.TeamsDetected &&
+                    MeetingDetected == other.MeetingDetected &&
+                    string.Equals(MeetingName, other.MeetingName, System.StringComparison.Ordinal) &&
                     Microphone == other.Microphone &&
                     Camera == other.Camera &&
+                    Hand == other.Hand &&
                     string.Equals(Message, other.Message, System.StringComparison.Ordinal);
             }
         }
@@ -93,6 +110,12 @@ namespace X3LaptopCompanion
             private set { SetField(ref teamsText, value, nameof(TeamsText)); }
         }
 
+        public string MeetingText
+        {
+            get { return meetingText; }
+            private set { SetField(ref meetingText, value, nameof(MeetingText)); }
+        }
+
         public string MicrophoneText
         {
             get { return microphoneText; }
@@ -103,6 +126,12 @@ namespace X3LaptopCompanion
         {
             get { return cameraText; }
             private set { SetField(ref cameraText, value, nameof(CameraText)); }
+        }
+
+        public string HandText
+        {
+            get { return handText; }
+            private set { SetField(ref handText, value, nameof(HandText)); }
         }
 
         public bool IsTestMode
@@ -154,6 +183,37 @@ namespace X3LaptopCompanion
             private set { SetField(ref testTeamsToggleText, value, nameof(TestTeamsToggleText)); }
         }
 
+        public bool TestMeetingDetected
+        {
+            get { return testMeetingDetected; }
+            set
+            {
+                if (SetField(ref testMeetingDetected, value, nameof(TestMeetingDetected)))
+                {
+                    TestMeetingToggleText = testMeetingDetected ? "In meeting" : "No meeting";
+                    OnTestStatusChanged("meeting");
+                }
+            }
+        }
+
+        public string TestMeetingName
+        {
+            get { return testMeetingName; }
+            set
+            {
+                if (SetField(ref testMeetingName, value, nameof(TestMeetingName)) && IsTestMode)
+                {
+                    OnTestStatusChanged("meeting name");
+                }
+            }
+        }
+
+        public string TestMeetingToggleText
+        {
+            get { return testMeetingToggleText; }
+            private set { SetField(ref testMeetingToggleText, value, nameof(TestMeetingToggleText)); }
+        }
+
         public string TestMicrophoneToggleText
         {
             get { return testMicrophoneToggleText; }
@@ -164,6 +224,12 @@ namespace X3LaptopCompanion
         {
             get { return testCameraToggleText; }
             private set { SetField(ref testCameraToggleText, value, nameof(TestCameraToggleText)); }
+        }
+
+        public string TestHandToggleText
+        {
+            get { return testHandToggleText; }
+            private set { SetField(ref testHandToggleText, value, nameof(TestHandToggleText)); }
         }
 
         public bool IsTeamsDryRun
@@ -260,7 +326,8 @@ namespace X3LaptopCompanion
             }
 
             DetailText = "Test status queued for BLE if it changed.";
-            QueueHostStatusIfChanged(true, CompanionTriState.Off, CompanionTriState.Off, "BLE test status",
+            QueueHostStatusIfChanged(true, true, "BLE test meeting", CompanionTriState.Off, CompanionTriState.Off,
+                CompanionTriState.Off, "BLE test status",
                 "manual test status");
         }
 
@@ -338,6 +405,13 @@ namespace X3LaptopCompanion
             OnTestStatusChanged("camera");
         }
 
+        private void CycleTestHand_Click(object sender, RoutedEventArgs e)
+        {
+            testHand = NextTriState(testHand);
+            TestHandToggleText = TriStateText(testHand, "Lowered", "Raised");
+            OnTestStatusChanged("hand");
+        }
+
         private void Hide_Click(object sender, RoutedEventArgs e)
         {
             Hide();
@@ -411,8 +485,12 @@ namespace X3LaptopCompanion
         private void ApplyTeamsSnapshotToUi(TeamsMeetingSnapshot snapshot)
         {
             TeamsText = TeamsTextForSnapshot(snapshot);
+            MeetingText = snapshot.MeetingDetected
+                ? (string.IsNullOrWhiteSpace(snapshot.MeetingName) ? "Yes" : snapshot.MeetingName)
+                : "No";
             MicrophoneText = TriStateText(snapshot.Microphone, "Muted", "Live");
             CameraText = TriStateText(snapshot.Camera, "Off", "Active");
+            HandText = TriStateText(snapshot.Hand, "Lowered", "Raised");
         }
 
         private void OnStatusTimerTick(object sender, System.EventArgs e)
@@ -433,8 +511,9 @@ namespace X3LaptopCompanion
 
             var snapshot = ReadTeamsMeetingSnapshot();
             ApplyTeamsSnapshotToUi(snapshot);
-            QueueHostStatusIfChanged(snapshot.TeamsDetected, snapshot.Microphone, snapshot.Camera,
-                StatusMessageForSnapshot(snapshot), "current");
+            QueueHostStatusIfChanged(snapshot.TeamsDetected, snapshot.MeetingDetected, snapshot.MeetingName,
+                snapshot.Microphone,
+                snapshot.Camera, snapshot.Hand, StatusMessageForSnapshot(snapshot), "current");
         }
 
         private void OnConnectionStatusChanged(object sender, CompanionConnectionStatus status)
@@ -525,14 +604,15 @@ namespace X3LaptopCompanion
 
             if (IsTeamsDryRun)
             {
-                QueueHostStatusIfChanged(true, CompanionTriState.Unknown, CompanionTriState.Unknown,
-                    "Teams dry run", "current dry-run", force);
+                QueueHostStatusIfChanged(true, false, string.Empty, CompanionTriState.Unknown, CompanionTriState.Unknown,
+                    CompanionTriState.Unknown, "Teams dry run", "current dry-run", force);
                 return;
             }
 
             var snapshot = ReadTeamsMeetingSnapshot();
-            QueueHostStatusIfChanged(snapshot.TeamsDetected, snapshot.Microphone, snapshot.Camera,
-                StatusMessageForSnapshot(snapshot), "current", force);
+            QueueHostStatusIfChanged(snapshot.TeamsDetected, snapshot.MeetingDetected, snapshot.MeetingName,
+                snapshot.Microphone,
+                snapshot.Camera, snapshot.Hand, StatusMessageForSnapshot(snapshot), "current", force);
         }
 
         private void SendTeamsCommandFromUi(TeamsCommand command)
@@ -544,8 +624,8 @@ namespace X3LaptopCompanion
                 TeamsText = "Dry run";
                 HostLog.Write(name + " dry-run completed; Teams was not touched.");
                 DetailText = "Dry run: " + name + " requested. Teams was not controlled.";
-                QueueHostStatusIfChanged(true, CompanionTriState.Unknown, CompanionTriState.Unknown,
-                    "Dry-run " + name, "teams command dry-run");
+                QueueHostStatusIfChanged(true, false, string.Empty, CompanionTriState.Unknown, CompanionTriState.Unknown,
+                    CompanionTriState.Unknown, "Dry-run " + name, "teams command dry-run");
                 return;
             }
 
@@ -556,8 +636,9 @@ namespace X3LaptopCompanion
                 HostLog.Write(name + " failed; Teams UIA control not found or not invokable.");
                 DetailText = "Teams control was not found. Start or join a meeting, then try again.";
                 var failedSnapshot = ReadTeamsMeetingSnapshot();
-                QueueHostStatusIfChanged(failedSnapshot.TeamsDetected, failedSnapshot.Microphone,
-                    failedSnapshot.Camera, StatusMessageForSnapshot(failedSnapshot), "teams command missing");
+                QueueHostStatusIfChanged(failedSnapshot.TeamsDetected, failedSnapshot.MeetingDetected,
+                    failedSnapshot.MeetingName, failedSnapshot.Microphone, failedSnapshot.Camera, failedSnapshot.Hand,
+                    StatusMessageForSnapshot(failedSnapshot), "teams command missing");
                 return;
             }
 
@@ -590,8 +671,9 @@ namespace X3LaptopCompanion
             {
                 var snapshot = ReadTeamsMeetingSnapshot();
                 ApplyTeamsSnapshotToUi(snapshot);
-                QueueHostStatusIfChanged(snapshot.TeamsDetected, snapshot.Microphone, snapshot.Camera,
-                    StatusMessageForSnapshot(snapshot), "post-command refresh");
+                QueueHostStatusIfChanged(snapshot.TeamsDetected, snapshot.MeetingDetected, snapshot.MeetingName,
+                    snapshot.Microphone,
+                    snapshot.Camera, snapshot.Hand, StatusMessageForSnapshot(snapshot), "post-command refresh");
             });
         }
 
@@ -633,11 +715,6 @@ namespace X3LaptopCompanion
                 return "Teams not found";
             }
 
-            if (!string.IsNullOrWhiteSpace(snapshot.MeetingName))
-            {
-                return snapshot.MeetingName;
-            }
-
             return snapshot.MeetingDetected ? "Teams meeting" : "Teams running";
         }
 
@@ -659,8 +736,9 @@ namespace X3LaptopCompanion
             return null;
         }
 
-        private void QueueHostStatusIfChanged(bool teamsDetected, CompanionTriState microphone, CompanionTriState camera,
-            string message, string reason, bool force = false)
+        private void QueueHostStatusIfChanged(bool teamsDetected, bool meetingDetected, string meetingName,
+            CompanionTriState microphone, CompanionTriState camera, CompanionTriState hand, string message,
+            string reason, bool force = false)
         {
             if (!wasBleConnected)
             {
@@ -668,7 +746,8 @@ namespace X3LaptopCompanion
                 return;
             }
 
-            var payload = new HostStatePayload(teamsDetected, microphone, camera, message);
+            var payload = new HostStatePayload(teamsDetected, meetingDetected, meetingName, microphone, camera, hand,
+                message);
             if (!force && payload.SameAs(lastSentHostState))
             {
                 HostLog.Write("Host state unchanged; BLE write skipped. reason=" + reason);
@@ -692,8 +771,8 @@ namespace X3LaptopCompanion
             try
             {
                 HostLog.Write("Host state write queued. reason=" + reason);
-                var sent = await connectionService.SendHostStatusAsync(payload.TeamsDetected, payload.Microphone,
-                    payload.Camera, payload.Message);
+                var sent = await connectionService.SendHostStatusAsync(payload.TeamsDetected, payload.MeetingDetected,
+                    payload.MeetingName, payload.Microphone, payload.Camera, payload.Hand, payload.Message);
                 if (sent)
                 {
                     lastSentHostState = payload;
@@ -736,15 +815,19 @@ namespace X3LaptopCompanion
             ApplyTestStatusToUi();
             var message = string.IsNullOrWhiteSpace(TestMessage) ? "Test status" : TestMessage;
             DetailText = "Test mode sent " + reason + ": teams=" + TestTeamsToggleText +
-                ", mic=" + TestMicrophoneToggleText + ", camera=" + TestCameraToggleText + ".";
-            QueueHostStatusIfChanged(TestTeamsDetected, testMicrophone, testCamera, message, "test " + reason, force);
+                ", meeting=" + TestMeetingToggleText + ", mic=" + TestMicrophoneToggleText +
+                ", camera=" + TestCameraToggleText + ", hand=" + TestHandToggleText + ".";
+            QueueHostStatusIfChanged(TestTeamsDetected, TestMeetingDetected, TestMeetingName, testMicrophone,
+                testCamera, testHand, message, "test " + reason, force);
         }
 
         private void ApplyTestStatusToUi()
         {
             TeamsText = TestTeamsDetected ? "Detected (test)" : "Not detected (test)";
+            MeetingText = TestMeetingToggleText + " (test)";
             MicrophoneText = TestMicrophoneToggleText + " (test)";
             CameraText = TestCameraToggleText + " (test)";
+            HandText = TestHandToggleText + " (test)";
         }
 
         private static CompanionTriState NextTriState(CompanionTriState value)

@@ -6,9 +6,9 @@
         xmlns:local="clr-namespace:X3LaptopCompanion"
         mc:Ignorable="d"
         Title="X3 Laptop Companion"
-        Height="660"
+        Height="720"
         Width="620"
-        MinHeight="640"
+        MinHeight="700"
         MinWidth="560"
         WindowStartupLocation="CenterScreen">
     <Grid Margin="24">
@@ -46,6 +46,8 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <TextBlock Text="X3 connection" FontWeight="SemiBold" />
@@ -60,11 +62,17 @@
                 <TextBlock Grid.Row="3" Text="Camera" Margin="0,8,0,0" FontWeight="SemiBold" />
                 <TextBlock Grid.Row="3" Grid.Column="1" Margin="0,8,0,0" Text="{Binding CameraText}" />
 
-                <TextBlock Grid.Row="4" Text="Test mode" Margin="0,8,0,0" FontWeight="SemiBold" />
-                <TextBlock Grid.Row="4" Grid.Column="1" Margin="0,8,0,0" Text="{Binding TestModeText}" />
+                <TextBlock Grid.Row="4" Text="Meeting" Margin="0,8,0,0" FontWeight="SemiBold" />
+                <TextBlock Grid.Row="4" Grid.Column="1" Margin="0,8,0,0" Text="{Binding MeetingText}" />
 
-                <TextBlock Grid.Row="5" Text="Teams mode" Margin="0,8,0,0" FontWeight="SemiBold" />
-                <TextBlock Grid.Row="5" Grid.Column="1" Margin="0,8,0,0" Text="{Binding TeamsModeText}" />
+                <TextBlock Grid.Row="5" Text="Hand" Margin="0,8,0,0" FontWeight="SemiBold" />
+                <TextBlock Grid.Row="5" Grid.Column="1" Margin="0,8,0,0" Text="{Binding HandText}" />
+
+                <TextBlock Grid.Row="6" Text="Test mode" Margin="0,8,0,0" FontWeight="SemiBold" />
+                <TextBlock Grid.Row="6" Grid.Column="1" Margin="0,8,0,0" Text="{Binding TestModeText}" />
+
+                <TextBlock Grid.Row="7" Text="Teams mode" Margin="0,8,0,0" FontWeight="SemiBold" />
+                <TextBlock Grid.Row="7" Grid.Column="1" Margin="0,8,0,0" Text="{Binding TeamsModeText}" />
             </Grid>
         </Border>
 
@@ -83,6 +91,7 @@
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
@@ -144,9 +153,11 @@
                       Margin="0,0,0,10">
                 <Grid Margin="8">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="120" />
-                        <ColumnDefinition Width="120" />
-                        <ColumnDefinition Width="120" />
+                        <ColumnDefinition Width="95" />
+                        <ColumnDefinition Width="95" />
+                        <ColumnDefinition Width="95" />
+                        <ColumnDefinition Width="95" />
+                        <ColumnDefinition Width="95" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
@@ -158,20 +169,39 @@
                               IsChecked="{Binding TestTeamsDetected, Mode=TwoWay}"
                               VerticalAlignment="Center"
                               Margin="0,0,8,8" />
-                    <Button Grid.Column="1"
+                    <CheckBox Grid.Column="1"
+                              Content="{Binding TestMeetingToggleText}"
+                              IsChecked="{Binding TestMeetingDetected, Mode=TwoWay}"
+                              VerticalAlignment="Center"
+                              Margin="0,0,8,8" />
+                    <Button Grid.Column="2"
                             Content="{Binding TestMicrophoneToggleText}"
                             Margin="0,0,8,8"
                             Click="CycleTestMicrophone_Click" />
-                    <Button Grid.Column="2"
+                    <Button Grid.Column="3"
                             Content="{Binding TestCameraToggleText}"
                             Margin="0,0,8,8"
                             Click="CycleTestCamera_Click" />
-                    <TextBox Grid.Column="3"
+                    <Button Grid.Column="4"
+                            Content="{Binding TestHandToggleText}"
+                            Margin="0,0,8,8"
+                            Click="CycleTestHand_Click" />
+                    <TextBox Grid.Column="5"
                              Text="{Binding TestMessage, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              Margin="0,0,0,8" />
 
                     <TextBlock Grid.Row="1"
-                               Grid.ColumnSpan="4"
+                               Text="Meeting name"
+                               VerticalAlignment="Center"
+                               Margin="0,0,8,0" />
+                    <TextBox Grid.Row="1"
+                             Grid.Column="1"
+                             Grid.ColumnSpan="5"
+                             Text="{Binding TestMeetingName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                             Margin="0,0,0,8" />
+
+                    <TextBlock Grid.Row="2"
+                               Grid.ColumnSpan="6"
                                Text="Enable test mode to send these simulated values over BLE."
                                Foreground="#555555" />
                 </Grid>
