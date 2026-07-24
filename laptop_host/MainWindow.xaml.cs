@@ -404,14 +404,15 @@ namespace X3LaptopCompanion
                 return;
             }
 
-            var teamsRunning = teamsController.IsTeamsRunning;
-            TeamsText = teamsRunning ? "Running" : "Not detected";
-            var microphone = teamsRunning
-                ? mediaStatusSensor.GetMicrophoneState(teamsController.TeamsProcessIds)
-                : CompanionTriState.Unknown;
-            var camera = mediaStatusSensor.GetCameraState();
-            MicrophoneText = TriStateText(microphone, "Muted", "Live");
-            CameraText = TriStateText(camera, "Off", "Active");
+            var snapshot = ReadTeamsMeetingSnapshot();
+            ApplyTeamsSnapshotToUi(snapshot);
+        }
+
+        private void ApplyTeamsSnapshotToUi(TeamsMeetingSnapshot snapshot)
+        {
+            TeamsText = TeamsTextForSnapshot(snapshot);
+            MicrophoneText = TriStateText(snapshot.Microphone, "Muted", "Live");
+            CameraText = TriStateText(snapshot.Camera, "Off", "Active");
         }
 
         private void OnStatusTimerTick(object sender, System.EventArgs e)
@@ -423,8 +424,17 @@ namespace X3LaptopCompanion
                 return;
             }
 
-            RefreshTeamsPresence();
-            SendCurrentHostStatus();
+            if (IsTeamsDryRun)
+            {
+                RefreshTeamsPresence();
+                SendCurrentHostStatus();
+                return;
+            }
+
+            var snapshot = ReadTeamsMeetingSnapshot();
+            ApplyTeamsSnapshotToUi(snapshot);
+            QueueHostStatusIfChanged(snapshot.TeamsDetected, snapshot.Microphone, snapshot.Camera,
+                StatusMessageForSnapshot(snapshot), "current");
         }
 
         private void OnConnectionStatusChanged(object sender, CompanionConnectionStatus status)
@@ -520,19 +530,14 @@ namespace X3LaptopCompanion
                 return;
             }
 
-            var teamsRunning = teamsController.IsTeamsRunning;
-            var microphone = teamsRunning
-                ? mediaStatusSensor.GetMicrophoneState(teamsController.TeamsProcessIds)
-                : CompanionTriState.Unknown;
-            var camera = mediaStatusSensor.GetCameraState();
-            QueueHostStatusIfChanged(teamsRunning, microphone, camera,
-                teamsRunning ? "Teams running" : "Teams not found", "current", force);
+            var snapshot = ReadTeamsMeetingSnapshot();
+            QueueHostStatusIfChanged(snapshot.TeamsDetected, snapshot.Microphone, snapshot.Camera,
+                StatusMessageForSnapshot(snapshot), "current", force);
         }
 
         private void SendTeamsCommandFromUi(TeamsCommand command)
         {
             var name = TeamsController.CommandName(command);
-            var shortcut = TeamsController.CommandShortcut(command);
             HostLog.Write(name + " requested.");
             RefreshTeamsPresence();
             if (IsTeamsDryRun)
@@ -548,16 +553,73 @@ namespace X3LaptopCompanion
             var explicitPid = ParseCommandTargetProcessId();
             if (!teamsController.TrySendCommand(command, mediaStatusSensor.TeamsAudioProcessIds, explicitPid))
             {
-                HostLog.Write(name + " failed; Teams window not found.");
-                DetailText = "Teams was not found. Start or join a Teams meeting, then try again.";
-                QueueHostStatusIfChanged(false, CompanionTriState.Unknown, CompanionTriState.Unknown,
-                    "Teams not found", "teams command missing");
+                HostLog.Write(name + " failed; Teams UIA control not found or not invokable.");
+                DetailText = "Teams control was not found. Start or join a meeting, then try again.";
+                var failedSnapshot = ReadTeamsMeetingSnapshot();
+                QueueHostStatusIfChanged(failedSnapshot.TeamsDetected, failedSnapshot.Microphone,
+                    failedSnapshot.Camera, StatusMessageForSnapshot(failedSnapshot), "teams command missing");
                 return;
             }
 
-            HostLog.Write(name + " posted to Teams.");
-            DetailText = name + " posted to Teams with " + shortcut + ".";
-            SendCurrentHostStatus();
+            HostLog.Write(name + " invoked in Teams.");
+            DetailText = name + " invoked in Teams.";
+            _ = RefreshAndSendCurrentStatusAfterInvokeAsync();
+        }
+
+        private async Task RefreshAndSendCurrentStatusAfterInvokeAsync()
+        {
+            await Task.Delay(500);
+            Dispatcher.Invoke(() =>
+            {
+                RefreshTeamsPresence();
+                SendCurrentHostStatus();
+            });
+        }
+
+        private TeamsMeetingSnapshot ReadTeamsMeetingSnapshot()
+        {
+            var teamsProcessIds = teamsController.TeamsProcessIds;
+            if (teamsProcessIds.Count > 0)
+            {
+                // WASAPI is no longer used as the mute source of truth, but it still gives us the Teams audio PID.
+                // That PID usually points at a hosted process whose parent owns the meeting window we need to scan.
+                mediaStatusSensor.GetMicrophoneState(teamsProcessIds);
+            }
+
+            return teamsController.GetMeetingSnapshot(mediaStatusSensor.TeamsAudioProcessIds,
+                ParseCommandTargetProcessId());
+        }
+
+        private static string TeamsTextForSnapshot(TeamsMeetingSnapshot snapshot)
+        {
+            if (!snapshot.TeamsDetected)
+            {
+                return "Not detected";
+            }
+
+            if (snapshot.MeetingDetected)
+            {
+                return string.IsNullOrWhiteSpace(snapshot.MeetingName)
+                    ? "In meeting"
+                    : "Meeting: " + snapshot.MeetingName;
+            }
+
+            return "Running";
+        }
+
+        private static string StatusMessageForSnapshot(TeamsMeetingSnapshot snapshot)
+        {
+            if (!snapshot.TeamsDetected)
+            {
+                return "Teams not found";
+            }
+
+            if (!string.IsNullOrWhiteSpace(snapshot.MeetingName))
+            {
+                return snapshot.MeetingName;
+            }
+
+            return snapshot.MeetingDetected ? "Teams meeting" : "Teams running";
         }
 
         private int? ParseCommandTargetProcessId()
